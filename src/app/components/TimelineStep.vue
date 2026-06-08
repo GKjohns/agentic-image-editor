@@ -1,8 +1,16 @@
 <script setup lang="ts">
-import type { StepEvent, Phase } from '#shared/types'
+import type { StepEvent, Phase, Operation, ToolName } from '#shared/types'
 
 const props = defineProps<{
   step: StepEvent
+  /** This frame is the current download target / final result. */
+  isResult?: boolean
+}>()
+
+const emit = defineEmits<{
+  open: []
+  continue: []
+  useAsResult: []
 }>()
 
 type BadgeColor = 'neutral' | 'warning' | 'info' | 'primary' | 'secondary' | 'success'
@@ -18,26 +26,49 @@ const phaseColors: Record<Phase, BadgeColor> = {
 
 const phaseColor = computed(() => props.step.phase ? phaseColors[props.step.phase] : 'neutral')
 
-/** Format one param value: signed numbers (e.g. "+35", "-10"), strings as-is. */
-function formatValue(v: number | string): string {
+/**
+ * Params that are NOT bipolar deltas centered on 0, so a leading `+` would mislead.
+ * `saturation.amount` is a MULTIPLIER centered on 1 (0.7 = a reduction, not "+0.7");
+ * `sharpen.amount` is a 0..1 magnitude. For these we show the bare number.
+ */
+const unsignedParams: Partial<Record<ToolName, string>> = {
+  saturation: 'amount',
+  sharpen: 'amount'
+}
+
+/** Format one param value: signed deltas (e.g. "+35", "-10") unless unsigned. */
+function formatValue(v: number | string, signed: boolean): string {
   if (typeof v === 'number') {
     const rounded = Math.round(v * 100) / 100
-    return rounded > 0 ? `+${rounded}` : `${rounded}`
+    return signed && rounded > 0 ? `+${rounded}` : `${rounded}`
   }
   return v
 }
 
-/** Compact, generic "tool · key val key val" — handles every tool's params. */
-const operationLabel = computed(() => {
-  const op = props.step.operation
-  if (!op) return null
+/** Compact, generic "tool · key val key val" label for one operation. */
+function opLabel(op: Operation): string {
   const parts = Object.entries(op.params).map(([k, v]) => {
     // `look` carries a single string `name` — render just the grade name.
     if (op.tool === 'look' && k === 'name') return String(v)
-    return `${k} ${formatValue(v)}`
+    const signed = unsignedParams[op.tool] !== k
+    return `${k} ${formatValue(v, signed)}`
   })
-  return `${op.tool} · ${parts.join(' ')}`
+  return parts.length ? `${op.tool} · ${parts.join(' · ')}` : op.tool
+}
+
+/**
+ * The batch's ops as compact chips (Sprint 1 batching). Falls back to the legacy
+ * single `operation` field only if `operations` is absent.
+ */
+const opChips = computed<string[]>(() => {
+  const batch = props.step.operations
+  if (batch && batch.length) return batch.map(opLabel)
+  if (props.step.operation) return [opLabel(props.step.operation)]
+  return []
 })
+
+/** The batch's stated sub-goal — the card title. */
+const goal = computed(() => props.step.goal ?? null)
 
 const isDeciding = computed(() => props.step.status === 'deciding')
 const hasImage = computed(() => (props.step.status === 'applied' || props.step.status === 'done') && !!props.step.imageUrl)
@@ -48,6 +79,8 @@ const isError = computed(() => props.step.status === 'error')
 <template>
   <UCard
     variant="subtle"
+    class="group transition-shadow"
+    :class="isResult ? 'ring-2 ring-primary' : ''"
     :ui="{ body: 'flex gap-4 sm:gap-5' }"
   >
     <!-- Step number + connector rail -->
@@ -87,15 +120,12 @@ const isError = computed(() => props.step.status === 'error')
           {{ step.phase }}
         </UBadge>
 
-        <UBadge
-          v-if="operationLabel"
-          color="neutral"
-          variant="outline"
-          size="sm"
-          class="font-mono"
+        <span
+          v-if="goal"
+          class="text-sm font-semibold text-highlighted"
         >
-          {{ operationLabel }}
-        </UBadge>
+          {{ goal }}
+        </span>
 
         <span
           v-if="isDeciding"
@@ -107,6 +137,33 @@ const isError = computed(() => props.step.status === 'error')
           />
           Deciding…
         </span>
+
+        <UBadge
+          v-if="isResult"
+          color="primary"
+          variant="solid"
+          size="sm"
+          icon="i-lucide-check-circle"
+        >
+          Result
+        </UBadge>
+      </div>
+
+      <!-- Op chips: one compact chip per operation in the batch -->
+      <div
+        v-if="opChips.length"
+        class="flex flex-wrap gap-1.5"
+      >
+        <UBadge
+          v-for="(chip, i) in opChips"
+          :key="i"
+          color="neutral"
+          variant="outline"
+          size="sm"
+          class="font-mono"
+        >
+          {{ chip }}
+        </UBadge>
       </div>
 
       <p
@@ -130,16 +187,47 @@ const isError = computed(() => props.step.status === 'error')
         :title="step.error"
         icon="i-lucide-triangle-alert"
       />
+
+      <!-- Actions: branch / use-as-result on any applied frame -->
+      <div
+        v-if="hasImage"
+        class="flex flex-wrap items-center gap-2 pt-0.5 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity"
+      >
+        <UButton
+          icon="i-lucide-git-branch"
+          label="Continue from here"
+          color="neutral"
+          variant="subtle"
+          size="xs"
+          @click="emit('continue')"
+        />
+        <UButton
+          v-if="!isResult"
+          icon="i-lucide-flag"
+          label="Use this as result"
+          color="neutral"
+          variant="ghost"
+          size="xs"
+          @click="emit('useAsResult')"
+        />
+      </div>
     </div>
 
-    <!-- Thumbnail -->
+    <!-- Thumbnail (click to open the lightbox) -->
     <div class="shrink-0 self-start">
-      <img
+      <button
         v-if="hasImage"
-        :src="step.imageUrl"
-        alt="Step result"
-        class="size-20 sm:size-24 rounded-lg object-cover ring-1 ring-default"
+        type="button"
+        class="block rounded-lg overflow-hidden ring-1 ring-default hover:ring-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-primary transition"
+        aria-label="Open frame full screen"
+        @click="emit('open')"
       >
+        <img
+          :src="step.imageUrl"
+          alt="Step result"
+          class="size-20 sm:size-24 object-cover"
+        >
+      </button>
       <div
         v-else-if="!isDone"
         class="flex items-center justify-center size-20 sm:size-24 rounded-lg bg-elevated ring-1 ring-default"

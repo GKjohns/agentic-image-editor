@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { StepEvent } from '#shared/types'
+import type { LightboxFrame } from '~/components/ImageLightbox.vue'
 
 // --- Input state -------------------------------------------------------------
 const file = ref<File | null>(null)
@@ -42,18 +43,145 @@ onBeforeUnmount(() => {
 
 const canRun = computed(() => !!file.value && intent.value.trim().length > 0)
 
+// --- Session + branch state --------------------------------------------------
+// Persist the session id so "continue from here" branch runs reuse the same
+// session (appending frames) instead of creating a fresh one.
+const sessionId = ref<string | null>(null)
+// When set, the next run() branches FROM this step (sent to /api/edit as
+// `fromStep`) and APPENDS to the timeline instead of wiping it.
+const fromStep = ref<number | null>(null)
+// Manual override of which step is the "result" (download target / big preview).
+// null → default = last applied frame.
+const resultStep = ref<number | null>(null)
+
 // --- Timeline (live, keyed by step) -----------------------------------------
 const stepMap = ref<Map<number, StepEvent>>(new Map())
 const steps = computed(() => [...stepMap.value.values()].sort((a, b) => a.step - b.step))
 
-// The final image is the last `applied` step's image (the terminal `done` step
-// carries no image — fall back to the previous applied step).
+// All applied frames (have a rendered image), in order.
+const appliedSteps = computed(() => steps.value.filter(s => s.status === 'applied' && s.imageUrl))
+
+// The default result frame = the last applied frame.
+const lastAppliedStep = computed(() => {
+  const a = appliedSteps.value
+  return a.length ? a[a.length - 1]!.step : null
+})
+
+// The effective result step honours a manual `resultStep` override (used by
+// "Use this as result" and "Undo last batch"), else the last applied frame.
+const effectiveResultStep = computed(() => resultStep.value ?? lastAppliedStep.value)
+
+// The final / download image is the effective result frame's image.
 const finalImageUrl = computed(() => {
-  const applied = steps.value.filter(s => s.status === 'applied' && s.imageUrl)
-  return applied.length ? applied[applied.length - 1]!.imageUrl ?? null : null
+  const step = effectiveResultStep.value
+  if (step === null) return null
+  return appliedSteps.value.find(s => s.step === step)?.imageUrl ?? null
 })
 
 const showFinal = computed(() => !running.value && !!finalImageUrl.value)
+
+// --- View state --------------------------------------------------------------
+// 'setup'   → no run yet: input panel is the hero, centered + roomy.
+// 'running' → a run is in flight: input collapses, large live preview takes over.
+// 'done'    → run finished: final image + Download, input still collapsed.
+const view = computed<'setup' | 'running' | 'done'>(() => {
+  if (running.value) return 'running'
+  if (stepMap.value.size > 0) return 'done'
+  return 'setup'
+})
+
+// Whether the (collapsible) input panel is expanded. In setup it's always the
+// hero; once a run starts it collapses, and the header button re-expands it.
+const setupOpen = ref(true)
+watch(view, (v) => {
+  setupOpen.value = v === 'setup'
+})
+
+// The most-recent applied frame — drives the large live preview while running.
+const latestImageUrl = computed(() => {
+  const a = appliedSteps.value
+  return a.length ? a[a.length - 1]!.imageUrl ?? null : null
+})
+
+// What the big preview shows: the running live frame, the chosen result on done,
+// else the local input preview as a placeholder.
+const previewImageUrl = computed(() => {
+  if (view.value === 'done') return finalImageUrl.value
+  return latestImageUrl.value ?? previewUrl.value
+})
+
+/** Reset back to a fresh setup screen (clears the run + keeps no image). */
+function newImage() {
+  stop()
+  stepMap.value = new Map()
+  errorMessage.value = null
+  onFileChange(null)
+  intent.value = ''
+  sessionId.value = null
+  fromStep.value = null
+  resultStep.value = null
+}
+
+// --- Lightbox ----------------------------------------------------------------
+const lightboxOpen = ref(false)
+const lightboxIndex = ref(0)
+
+// Frames for the lightbox + prev/next paging: original → each applied batch.
+const lightboxFrames = computed<LightboxFrame[]>(() => {
+  const frames: LightboxFrame[] = []
+  if (sessionId.value) {
+    frames.push({ imageUrl: `/api/image/${sessionId.value}/original`, label: 'Original' })
+  } else if (previewUrl.value) {
+    frames.push({ imageUrl: previewUrl.value, label: 'Original' })
+  }
+  for (const s of appliedSteps.value) {
+    frames.push({
+      imageUrl: s.imageUrl!,
+      label: `Batch ${s.step}`,
+      goal: s.goal,
+      operations: s.operations
+    })
+  }
+  return frames
+})
+
+/** Open the lightbox on the frame for a given step number (or original). */
+function openLightbox(step: number | 'original') {
+  const idx = step === 'original'
+    ? lightboxFrames.value.findIndex(f => f.label === 'Original')
+    : lightboxFrames.value.findIndex(f => f.label === `Batch ${step}`)
+  lightboxIndex.value = idx >= 0 ? idx : 0
+  lightboxOpen.value = true
+}
+
+/** Open the lightbox on whatever the big preview currently shows. */
+function openPreviewLightbox() {
+  const step = effectiveResultStep.value
+  openLightbox(step ?? 'original')
+}
+
+// --- Branch / result actions (Sprint 3) --------------------------------------
+/** "Continue from here": branch a new run off `step`, appending frames. */
+function continueFrom(step: number) {
+  fromStep.value = step
+  resultStep.value = null
+  intent.value = ''
+  setupOpen.value = true
+}
+
+/** "Use this as result": make `step` the download target / big preview. */
+function useAsResult(step: number) {
+  resultStep.value = step
+}
+
+/** "Undo last batch": revert the result to the second-to-last applied frame. */
+function undoLastBatch() {
+  const a = appliedSteps.value
+  if (a.length < 2) return
+  resultStep.value = a[a.length - 2]!.step
+}
+
+const canUndo = computed(() => view.value === 'done' && appliedSteps.value.length >= 2)
 
 let controller: AbortController | null = null
 
@@ -106,24 +234,40 @@ async function run() {
   if (!canRun.value || running.value) return
   running.value = true
   errorMessage.value = null
-  stepMap.value = new Map()
   controller = new AbortController()
 
+  // A branch/continue run (fromStep set) APPENDS to the existing timeline and
+  // reuses the same session; only a truly fresh run wipes the cards.
+  const branching = fromStep.value !== null && !!sessionId.value
+  if (!branching) {
+    stepMap.value = new Map()
+    resultStep.value = null
+  }
+
   try {
-    // 1. Create a session from the uploaded image.
-    const form = new FormData()
-    form.append('image', file.value!)
-    const session = await $fetch<{ id: string }>('/api/session', {
-      method: 'POST',
-      body: form,
-      signal: controller.signal
-    })
+    let id = sessionId.value
+    // 1. Create a session from the uploaded image (fresh run only).
+    if (!branching || !id) {
+      const form = new FormData()
+      form.append('image', file.value!)
+      const session = await $fetch<{ id: string }>('/api/session', {
+        method: 'POST',
+        body: form,
+        signal: controller.signal
+      })
+      id = session.id
+      sessionId.value = id
+    }
 
     // 2. Run the edit; stream the step events back via a plain fetch.
     const res = await fetch('/api/edit', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ id: session.id, intent: intent.value }),
+      body: JSON.stringify({
+        id,
+        intent: intent.value,
+        ...(branching ? { fromStep: fromStep.value } : {})
+      }),
       signal: controller.signal
     })
 
@@ -141,6 +285,8 @@ async function run() {
   } finally {
     running.value = false
     controller = null
+    // One-shot: consume the branch point so the next plain Run is a fresh run.
+    fromStep.value = null
   }
 }
 
@@ -152,147 +298,164 @@ function stop() {
 
 <template>
   <UContainer class="py-8 sm:py-12">
-    <div class="max-w-3xl mx-auto mb-8 sm:mb-10">
-      <h1 class="text-2xl sm:text-3xl font-bold text-highlighted">
-        Agentic Image Editor
-      </h1>
-      <p class="mt-2 text-muted">
-        Drop an image, describe the edit, watch an AI agent do it step by step.
-      </p>
+    <div
+      class="mb-8 sm:mb-10 flex items-start justify-between gap-4"
+      :class="view === 'setup' ? 'max-w-3xl mx-auto' : 'max-w-6xl mx-auto'"
+    >
+      <div>
+        <h1 class="text-2xl sm:text-3xl font-bold text-highlighted">
+          Agentic Image Editor
+        </h1>
+        <p class="mt-2 text-muted">
+          Drop an image, describe the edit, watch an AI agent do it step by step.
+        </p>
+      </div>
+
+      <!-- Header controls (only once a run has started) -->
+      <div
+        v-if="view !== 'setup'"
+        class="flex items-center gap-2 shrink-0"
+      >
+        <UButton
+          v-if="canUndo"
+          icon="i-lucide-undo-2"
+          label="Undo last batch"
+          color="neutral"
+          variant="subtle"
+          size="sm"
+          @click="undoLastBatch"
+        />
+        <UButton
+          icon="i-lucide-sliders-horizontal"
+          label="Edit setup"
+          color="neutral"
+          variant="subtle"
+          size="sm"
+          :class="setupOpen ? 'ring-1 ring-primary/40' : ''"
+          @click="setupOpen = !setupOpen"
+        />
+        <UButton
+          icon="i-lucide-image-plus"
+          label="New image"
+          color="neutral"
+          variant="ghost"
+          size="sm"
+          @click="newImage"
+        />
+      </div>
     </div>
 
-    <div class="grid lg:grid-cols-5 gap-6 lg:gap-8 max-w-6xl mx-auto">
-      <!-- Input panel -->
-      <div class="lg:col-span-2">
+    <!-- SETUP: input panel is the hero, centered + roomy -->
+    <div
+      v-if="view === 'setup'"
+      class="max-w-xl mx-auto"
+    >
+      <UCard>
+        <InputPanel
+          v-model:preview-url="previewUrl"
+          v-model:intent="intent"
+          :samples="samples"
+          :can-run="canRun"
+          :running="running"
+          :error-message="errorMessage"
+          @pick-file="onInputFile"
+          @clear-file="onFileChange(null)"
+          @load-sample="loadSample"
+          @run="run"
+          @stop="stop"
+        />
+      </UCard>
+    </div>
+
+    <!-- RUNNING / DONE: large live preview takes over; input collapses inline -->
+    <div
+      v-else
+      class="grid lg:grid-cols-5 gap-6 lg:gap-8 max-w-6xl mx-auto"
+    >
+      <!-- Collapsible input panel (re-opened from the header button) -->
+      <div
+        v-if="setupOpen"
+        class="lg:col-span-2"
+      >
         <UCard class="lg:sticky lg:top-8">
-          <div class="space-y-5">
-            <!-- Dropzone -->
-            <div>
-              <label class="block text-sm font-medium text-default mb-2">Image</label>
-
-              <div
-                v-if="previewUrl"
-                class="relative group rounded-lg overflow-hidden ring-1 ring-default"
-              >
-                <img
-                  :src="previewUrl"
-                  alt="Selected image preview"
-                  class="w-full h-48 object-cover"
-                >
-                <UButton
-                  icon="i-lucide-x"
-                  color="neutral"
-                  variant="solid"
-                  size="xs"
-                  class="absolute top-2 right-2"
-                  aria-label="Remove image"
-                  @click="onFileChange(null)"
-                />
-              </div>
-
-              <label
-                v-else
-                class="flex flex-col items-center justify-center gap-2 h-48 rounded-lg border-2 border-dashed border-default bg-elevated/40 hover:bg-elevated/70 transition-colors cursor-pointer text-center px-4"
-              >
-                <UIcon
-                  name="i-lucide-image-up"
-                  class="size-8 text-dimmed"
-                />
-                <span class="text-sm text-muted">
-                  Drop an image or <span class="text-primary font-medium">browse</span>
-                </span>
-                <span class="text-xs text-dimmed">PNG, JPG, WebP</span>
-                <input
-                  type="file"
-                  accept="image/*"
-                  class="sr-only"
-                  @change="onInputFile"
-                >
-              </label>
-
-              <!-- Sample images for users without a photo handy -->
-              <div
-                v-if="!previewUrl"
-                class="mt-3"
-              >
-                <p class="text-xs text-dimmed mb-2">
-                  No image? Try a sample:
-                </p>
-                <div class="grid grid-cols-5 gap-2">
-                  <button
-                    v-for="sample in samples"
-                    :key="sample.src"
-                    type="button"
-                    class="group relative rounded-md overflow-hidden ring-1 ring-default hover:ring-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-primary transition"
-                    :title="sample.label"
-                    @click="loadSample(sample)"
-                  >
-                    <img
-                      :src="sample.src"
-                      :alt="sample.label"
-                      class="w-full h-12 object-cover"
-                    >
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <!-- Intent -->
-            <div>
-              <label class="block text-sm font-medium text-default mb-2">Edit intent</label>
-              <UTextarea
-                v-model="intent"
-                :rows="3"
-                autoresize
-                class="w-full"
-                placeholder="e.g. straighten the horizon, warm it up, lift the shadows"
-              />
-            </div>
-
-            <!-- Actions -->
-            <div class="flex items-center gap-2">
-              <UButton
-                v-if="!running"
-                icon="i-lucide-sparkles"
-                label="Run"
-                color="primary"
-                :disabled="!canRun"
-                block
-                @click="run"
-              />
-              <template v-else>
-                <UButton
-                  icon="i-lucide-loader-circle"
-                  label="Running…"
-                  color="primary"
-                  variant="soft"
-                  :ui="{ leadingIcon: 'animate-spin' }"
-                  block
-                  disabled
-                />
-                <UButton
-                  icon="i-lucide-square"
-                  label="Stop"
-                  color="neutral"
-                  variant="subtle"
-                  @click="stop"
-                />
-              </template>
-            </div>
-
-            <UAlert
-              v-if="errorMessage"
-              color="error"
-              variant="subtle"
-              :title="errorMessage"
-              icon="i-lucide-triangle-alert"
-            />
-          </div>
+          <InputPanel
+            v-model:preview-url="previewUrl"
+            v-model:intent="intent"
+            :samples="samples"
+            :can-run="canRun"
+            :running="running"
+            :error-message="errorMessage"
+            @pick-file="onInputFile"
+            @clear-file="onFileChange(null)"
+            @load-sample="loadSample"
+            @run="run"
+            @stop="stop"
+          />
         </UCard>
       </div>
 
-      <!-- Timeline + final -->
-      <div class="lg:col-span-3 space-y-6">
+      <!-- Main area: large live preview + supporting timeline -->
+      <div :class="setupOpen ? 'lg:col-span-3 space-y-6' : 'lg:col-span-5 space-y-6'">
+        <!-- Large live preview of the latest frame (final on done) -->
+        <section>
+          <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-2">
+              <h2 class="text-sm font-semibold uppercase tracking-wide text-muted">
+                {{ view === 'done' ? 'Final result' : 'Live preview' }}
+              </h2>
+              <UBadge
+                v-if="running"
+                color="primary"
+                variant="subtle"
+                size="sm"
+                :ui="{ leadingIcon: 'animate-spin' }"
+                icon="i-lucide-loader-circle"
+              >
+                Editing…
+              </UBadge>
+            </div>
+            <UButton
+              v-if="showFinal"
+              icon="i-lucide-download"
+              label="Download"
+              color="primary"
+              variant="subtle"
+              size="sm"
+              :to="finalImageUrl ?? undefined"
+              download="edited.jpg"
+            />
+          </div>
+
+          <div class="rounded-xl overflow-hidden ring-1 ring-default bg-elevated">
+            <button
+              v-if="previewImageUrl"
+              type="button"
+              class="block w-full group cursor-zoom-in"
+              :disabled="!effectiveResultStep && !latestImageUrl"
+              aria-label="Open preview full screen"
+              @click="openPreviewLightbox"
+            >
+              <img
+                :src="previewImageUrl"
+                :alt="view === 'done' ? 'Final edited image' : 'Live preview of the latest frame'"
+                class="w-full max-h-[34rem] object-contain"
+              >
+            </button>
+            <div
+              v-else
+              class="flex items-center justify-center h-72 text-muted"
+            >
+              <UIcon
+                name="i-lucide-loader-circle"
+                class="size-6 animate-spin"
+              />
+            </div>
+          </div>
+        </section>
+
+        <USeparator />
+
+        <!-- Supporting timeline strip -->
         <section>
           <div class="flex items-center gap-2 mb-4">
             <h2 class="text-sm font-semibold uppercase tracking-wide text-muted">
@@ -303,58 +466,30 @@ function stop() {
               variant="subtle"
               size="sm"
             >
-              {{ steps.length }} steps
+              {{ steps.length }} {{ steps.length === 1 ? 'batch' : 'batches' }}
             </UBadge>
           </div>
 
-          <div
-            v-if="steps.length"
-            class="space-y-3"
-          >
+          <div class="space-y-3">
             <TimelineStep
               v-for="s in steps"
               :key="s.step"
               :step="s"
+              :is-result="s.step === effectiveResultStep"
+              @open="openLightbox(s.step)"
+              @continue="continueFrom(s.step)"
+              @use-as-result="useAsResult(s.step)"
             />
-          </div>
-
-          <UCard
-            v-else
-            variant="subtle"
-          >
-            <p class="text-sm text-muted text-center py-6">
-              Run an edit to watch the agent's steps appear here.
-            </p>
-          </UCard>
-        </section>
-
-        <USeparator v-if="showFinal" />
-
-        <!-- Final image -->
-        <section v-if="showFinal">
-          <div class="flex items-center justify-between mb-4">
-            <h2 class="text-sm font-semibold uppercase tracking-wide text-muted">
-              Final result
-            </h2>
-            <UButton
-              icon="i-lucide-download"
-              label="Download"
-              color="primary"
-              variant="subtle"
-              size="sm"
-              :to="finalImageUrl ?? undefined"
-              download="edited.jpg"
-            />
-          </div>
-          <div class="rounded-xl overflow-hidden ring-1 ring-default bg-elevated">
-            <img
-              :src="finalImageUrl!"
-              alt="Final edited image"
-              class="w-full max-h-[28rem] object-contain"
-            >
           </div>
         </section>
       </div>
     </div>
+
+    <!-- Full-screen frame viewer with download + prev/next -->
+    <ImageLightbox
+      v-model:open="lightboxOpen"
+      v-model:index="lightboxIndex"
+      :frames="lightboxFrames"
+    />
   </UContainer>
 </template>
