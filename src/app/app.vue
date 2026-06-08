@@ -27,8 +27,11 @@ useSeoMeta({
   <UApp>
     <UHeader>
       <template #left>
-        <NuxtLink to="/">
-          <AppLogo class="w-auto h-6 shrink-0" />
+        <NuxtLink
+          to="/"
+          class="font-semibold tracking-tight text-highlighted whitespace-nowrap"
+        >
+          Agentic Image Editor
         </NuxtLink>
       </template>
 
@@ -41,7 +44,7 @@ useSeoMeta({
       <NuxtPage />
     </UMain>
 
-    <USeparator icon="i-lucide-sparkles" />
+    <USeparator />
 
     <UFooter>
       <template #left>

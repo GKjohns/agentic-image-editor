@@ -109,7 +109,7 @@ const emit = defineEmits<{
     <div class="flex items-center gap-2">
       <UButton
         v-if="!running"
-        icon="i-lucide-sparkles"
+        icon="i-lucide-play"
         label="Run"
         color="primary"
         :disabled="!canRun"

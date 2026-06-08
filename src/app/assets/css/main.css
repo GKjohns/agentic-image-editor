@@ -3,16 +3,27 @@
 
 @theme static {
   --font-sans: 'Public Sans', sans-serif;
+}
 
-  --color-green-50: #EFFDF5;
-  --color-green-100: #D9FBE8;
-  --color-green-200: #B3F5D1;
-  --color-green-300: #75EDAE;
-  --color-green-400: #00DC82;
-  --color-green-500: #00C16A;
-  --color-green-600: #00A155;
-  --color-green-700: #007F45;
-  --color-green-800: #016538;
-  --color-green-900: #0A5331;
-  --color-green-950: #052E16;
+/*
+ * Monochrome primary: black in light mode, white in dark mode.
+ *
+ * The catch (per the Nuxt UI docs): you can't set `primary: 'black'` in
+ * app.config — semantic colors must name a palette with a full 50–950 scale,
+ * which black/white don't have. Nuxt UI derives `--ui-primary` from a shade
+ * (500 in light, 400 in dark). So instead we point `primary` at the neutral
+ * ramp (app.config.ts) and override the semantic `--ui-primary` token here.
+ *
+ * These rules are deliberately UNLAYERED so they win over @nuxt/ui's
+ * `@layer theme` assignment (unlayered declarations beat any cascade layer).
+ * Solid buttons pair `bg-primary` with `text-inverted` (already #fff in light /
+ * near-black in dark), so this yields black-on-white and white-on-black
+ * automatically; hovers use `bg-primary/75`, which derives from this token too.
+ */
+:root {
+  --ui-primary: #000;
+}
+
+.dark {
+  --ui-primary: #fff;
 }
