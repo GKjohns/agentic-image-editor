@@ -79,7 +79,7 @@ detection (force-stop keeps the pre-oscillation frame) on top of the `MAX_STEPS`
 |----------|----------|-------------|
 | `AI_GATEWAY_API_KEY` | Yes | Vercel AI Gateway key. Routes the vision model. |
 | `AGENT_MODEL` | No | Gateway model string (default `anthropic/claude-sonnet-4-6`). Swap providers without code changes. |
-| `MAX_STEPS` | No | Agent loop hard cap (default 8). |
+| `MAX_STEPS` | No | Agent loop hard cap (default 30). |
 
 ## Deferred (see `internal_docs/`)
 
