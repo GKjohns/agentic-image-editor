@@ -10,10 +10,13 @@ description: >
 
 # Photo Editing Process — operator's playbook
 
-This tool's agent edits **one global op per step** and **re-looks at the rendered
-result** before choosing the next. No local masking, no healing, no crop-to-aspect —
-every move affects the whole frame. That constraint is the whole game: the discipline is
-*sequence and restraint*, because you can't paint a fix into one corner.
+This tool's agent plans and applies a **batch of global ops toward one stated goal each
+iteration**, then **re-looks at the rendered result** before planning the next batch. It
+batches corrections that clearly belong together but isolates a move whose result must be
+seen first (e.g. a large exposure change before judging contrast). No local masking, no
+healing, no crop-to-aspect — every move affects the whole frame. That constraint is the
+whole game: the discipline is *sequence and restraint*, because you can't paint a fix into
+one corner.
 
 The single most important thing: **a good edit is 3-5 deliberate moves, not 8 fiddly
 ones.** Most amateur edits are bad because of *too much*, not too little.
@@ -139,8 +142,9 @@ Numbers a novice doesn't have. These are the guard-rails:
 "Done" looks like: the intent is met, neutrals are neutral, the subject is correctly
 exposed, there's a true black and a clean white without clipping detail you care about,
 and nothing screams "edited." If you've made 3-5 deliberate moves and the last one
-produced a *small* improvement, you're done. The agent has a step cap — **converge,
-don't oscillate.** Each step should be smaller than the last as you home in.
+produced a *small* improvement, you're done. The agent has an iteration cap (each
+iteration applies a batch) — **converge, don't oscillate.** Each batch should do less than
+the last as you home in.
 
 ## Intent → ops (the translation layer)
 
@@ -173,14 +177,16 @@ don't oscillate.** Each step should be smaller than the last as you home in.
 
 ## Self-correction discipline
 
-The agent re-looks every step — use it:
+The agent re-looks after every batch (not after every op) — use it. Keep a batch to ops
+you're confident belong together; when a move is large or its outcome is uncertain, make
+it its own one-op batch so the next decision reads the real result:
 
-- **Overshot? Apply a smaller opposite nudge, not a pile-on.** If +0.4 contrast was too
-  much, go −0.1, not a fresh stack of "corrections."
+- **Overshot? Apply a smaller opposite nudge in the next batch, not a pile-on.** If +0.4
+  contrast was too much, go −0.1, not a fresh stack of "corrections."
 - **Crushed blacks** (lost shadow texture)? `tone` shadows+ a little, or reduce the
   prior contrast move.
 - **Halos / crunch**? Back off `sharpen`.
 - **Clipped after exposure**? Pull `tone` highlights− rather than darkening the whole
   image back down.
-- Steps should shrink as you converge. If two consecutive moves are the same size in
-  opposite directions, you're oscillating — stop and accept the better of the two.
+- Batches should shrink as you converge. If two consecutive batches push the same control
+  the same size in opposite directions, you're oscillating — stop and accept the better.

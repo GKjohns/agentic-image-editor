@@ -2,10 +2,10 @@
 
 A single-page Nuxt tool: drop an image, type a natural-language edit intent (e.g.
 _"straighten the horizon, brighten it, make it pop"_), and watch a **vision-in-the-loop
-agent** edit it step by step. Each step the model **looks at the current rendered image**,
-decides one editing operation, the server applies it with Sharp, and the loop continues
-until the model judges the goal met (or hits a step cap). The live timeline streaming each
-step's reasoning + result is the centerpiece.
+agent** edit it step by step. Each iteration the model **looks at the current rendered image**,
+states a sub-goal and decides a **batch** of editing operations, the server applies them with
+Sharp, and the loop continues until the model judges the goal met (or hits a step cap). The
+live timeline streaming each batch's goal, ops + result is the centerpiece.
 
 ## Quick start
 
@@ -28,20 +28,27 @@ No image handy? The UI ships sample photos (a "No image? Try a sample" picker) �
 ```
 Browser (app/pages/index.vue)
   1. POST /api/session  (FormData: image)        → writes .data/sessions/<id>/original.jpg → { id }
-  2. POST /api/edit     { id, intent }  (stream)  → server runs the MANUAL vision loop:
+  2. POST /api/edit     { id, intent, fromStep? }  (stream)  → server runs the MANUAL vision loop:
         for step in 1..MAX_STEPS:
           decision = generateObject({ model: <gateway>, image: current, schema })  // vision + structured
-          emit data-step { status:'deciding', assessment, operation, reason }
+          emit data-step { status:'deciding', goal, operations[], assessment, reason }
           if decision.done: break
-          newImg = executor.apply(current, decision.operation)                      // Sharp
+          for op in decision.operations (≤ MAX_OPS_PER_BATCH):                      // Sharp
+            current = executor.apply(current, op)
           emit data-step { status:'applied', imageUrl:/api/image/<id>/<step> }
   3. GET  /api/image/<id>/<step>                  → serves each intermediate / final jpg
+
+     `/api/edit` also accepts an optional `fromStep` (planned, Sprint 3) — resume the loop
+     from a chosen earlier frame instead of the original.
 ```
 
 The loop is **manual** (not the AI SDK auto tool-roundtrip) so the model sees *new pixels*
-each step — that's what makes it self-correcting. Decisions stream over the AI SDK
+each iteration — that's what makes it self-correcting. Decisions stream over the AI SDK
 UI-message stream (`createUIMessageStream` + custom `data-step` parts) and the client
-consumes them with a plain `fetch` + SSE reader.
+consumes them with a plain `fetch` + SSE reader. Each `data-step` part carries
+`{ goal, operations[] }` — the batch's stated sub-goal and the ops applied that iteration
+(a legacy single `operation?` field remains in the type for back-compat but is no longer
+populated).
 
 ## Architecture seams (kept swappable for a future Vercel Sandbox)
 
@@ -52,7 +59,8 @@ consumes them with a plain `fetch` + SSE reader.
 
 ## Toolset (Sharp + raw-buffer pixel math — no ImageMagick)
 
-The agent chooses one op per step. Everything runs in-process: Sharp for geometry/encode,
+The agent chooses a batch of ops per iteration (each toward a stated sub-goal). Everything
+runs in-process: Sharp for geometry/encode,
 raw-buffer (`sharp().raw()`) pixel math for the tonal/color curves. No external binary —
 which also keeps the future Vercel Sandbox path clean. Pure helpers live in `server/utils/pixels.ts`.
 
@@ -79,7 +87,8 @@ detection (force-stop keeps the pre-oscillation frame) on top of the `MAX_STEPS`
 |----------|----------|-------------|
 | `AI_GATEWAY_API_KEY` | Yes | Vercel AI Gateway key. Routes the vision model. |
 | `AGENT_MODEL` | No | Gateway model string (default `anthropic/claude-sonnet-4-6`). Swap providers without code changes. |
-| `MAX_STEPS` | No | Agent loop hard cap (default 30). |
+| `MAX_STEPS` | No | Agent loop hard cap (default 30). Since Sprint 1 each iteration applies a *batch*, so this now caps **re-look iterations** (kept as `MAX_STEPS` — no rename). |
+| `MAX_OPS_PER_BATCH` | No | Max ops the executor applies per batch/iteration (default 6). Excess ops in a batch are dropped. |
 
 ## Deferred (see `internal_docs/`)
 
