@@ -216,15 +216,19 @@ export function hslToRgb(h: number, s: number, l: number): [number, number, numb
 /**
  * Smart "vibrance" saturation in place.
  *
- * `amount` -1..1. The push per pixel is `amount * (1 - s)` so low-saturation
- * pixels (skin, neutrals) move more and already-vivid pixels barely move. Hue
- * and lightness are held fixed. amount < 0 desaturates.
+ * `amount` -1..1. The push per pixel is `amount * s * (1 - s)`: it scales with
+ * existing saturation `s` so genuine NEUTRALS stay neutral (no manufactured
+ * color), peaks for muted mid-saturation colors, and tapers off as `(1 - s)` for
+ * already-vivid pixels so they barely move. Hue and lightness are held fixed.
+ * amount < 0 desaturates. (NB: the earlier `amount * (1 - s)` form boosted
+ * low-saturation pixels the MOST — it shoved every faintly-tinted gray to ~0.45
+ * saturation at amount 0.45, turning skies/buildings psychedelic neon.)
  */
 export function applyVibrance(data: Buffer, channels: number, amount: number): void {
   const amt = Math.max(-1, Math.min(1, amount))
   for (let i = 0; i < data.length; i += channels) {
     const [h, s, l] = rgbToHsl(data[i]!, data[i + 1]!, data[i + 2]!)
-    const newS = Math.max(0, Math.min(1, s + amt * (1 - s)))
+    const newS = Math.max(0, Math.min(1, s + amt * s * (1 - s)))
     const [r, g, b] = hslToRgb(h, newS, l)
     data[i] = r
     data[i + 1] = g
