@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parametric DevelopConfig — Verification</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #1c2024; background: #f6f7f9; margin: 0; padding: 0 1rem 5rem;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; }
+  header { padding: 2.5rem 0 1rem; border-bottom: 1px solid #e3e6ea; margin-bottom: 2rem; }
+  h1 { font-size: 1.7rem; margin: 0 0 .3rem; }
+  h2 { font-size: 1.25rem; margin: 2.6rem 0 .4rem; padding-top: 1.2rem; border-top: 1px solid #e3e6ea; }
+  h3 { font-size: 1.02rem; margin: 1.6rem 0 .3rem; }
+  .sub { color: #5b6470; margin: 0; }
+  .meta { color: #7a828d; font-size: .85rem; margin-top: .6rem; }
+  p { margin: .5rem 0; }
+  code { background: #eceef1; padding: .1rem .35rem; border-radius: 4px; font-size: .86em; }
+  pre { background: #1c2024; color: #e8eaed; padding: 1rem; border-radius: 8px; overflow-x: auto; font-size: .82rem; line-height: 1.5; }
+  figure { margin: 1rem 0; }
+  img { max-width: 100%; border-radius: 8px; border: 1px solid #d8dce1; display: block; }
+  figcaption { color: #5b6470; font-size: .85rem; margin-top: .4rem; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
+  .pill { display: inline-block; font-size: .72rem; font-weight: 600; padding: .12rem .5rem; border-radius: 999px; vertical-align: middle; }
+  .ok { background: #d8f3e3; color: #16683f; }
+  .bug { background: #fde6cf; color: #9a4f12; }
+  .callout { background: #fff; border: 1px solid #e3e6ea; border-left: 3px solid #b06a2a; border-radius: 8px; padding: 1rem 1.2rem; margin: 1rem 0; }
+  .callout.good { border-left-color: #2a9d63; }
+  table { border-collapse: collapse; width: 100%; font-size: .85rem; margin: .8rem 0; }
+  th, td { border: 1px solid #e3e6ea; padding: .4rem .6rem; text-align: left; }
+  th { background: #eef0f3; }
+  .hl { background: #fff3cd; }
+  ul { margin: .4rem 0; padding-left: 1.3rem; }
+  li { margin: .2rem 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Parametric DevelopConfig — Verification</h1>
+  <p class="sub">Refactor: sequential baked-edits → non-destructive parametric config (re-render from original each pass).</p>
+  <p class="meta">June 8, 2026 · 2 sprints · plan: <code>internal_docs/20260608_parametric_develop_config/implementation_plan.md</code></p>
+</header>
+
+<h2>What was built</h2>
+<p>
+  The agent used to <strong>bake</strong> each batch of edits onto the previous frame's pixels. To dial something back
+  ("a little less contrast") it could only pile an inverse op on top — compounding JPEG loss, fighting its own
+  nonlinearity, and getting stuck. Now the agent holds <strong>one <code>DevelopConfig</code></strong> (one absolute
+  value per slider), and the server re-renders the whole ordered stack <strong>from <code>original.jpg</code></strong>
+  every pass. "Less contrast" is literally <code>contrast: 0.25 → 0.18</code>, re-rendered clean. Any slider moves up or
+  down freely; no compounding, no hysteresis.
+</p>
+<p>
+  A config is a <em>fixed</em> set of fields, so the model's structured output is naturally flat (one field per slider) —
+  the proven-safe schema shape, no newline-string parser needed. The 9 Sharp/raw-buffer pixel ops are untouched;
+  <code>renderConfig</code> just calls them in canonical order from the original.
+</p>
+
+<h2>Sprint 1 — Parametric core <span class="pill ok">verified</span></h2>
+<p>
+  New <code>DevelopConfig</code> type + <code>DEFAULT_CONFIG</code>; <code>executor.renderConfig(original, config)</code>;
+  a flat <code>decideConfig</code> schema; loop rewrite (render-from-original, converge when config unchanged or
+  <code>done</code>); reframed editing guide; removed the now-dead <code>MAX_OPS_PER_BATCH</code>.
+</p>
+
+<h3>Convergence + "a little less of that" (the headline behavior)</h3>
+<p>
+  Live run on <code>flat-and-crooked.jpg</code>, intent "make this flat, crooked photo pop". The agent freely moved
+  sliders both directions and converged on its own <code>done</code> — <strong>0 parse errors</strong>:
+</p>
+<table>
+  <tr><th>Step</th><th>contrast</th><th>vibrance</th><th>note</th></tr>
+  <tr><td>2</td><td>0.30</td><td>0.45</td><td>big pop pass — overshoots</td></tr>
+  <tr class="hl"><td>3</td><td>0.20</td><td>0.25</td><td>↓ <strong>reduces</strong> both (re-rendered from original)</td></tr>
+  <tr><td>4</td><td>0.25</td><td>0.35</td><td>small nudge back up</td></tr>
+  <tr class="hl"><td>6</td><td>0.20</td><td>0.15</td><td>↓ <strong>reduces</strong> vibrance again</td></tr>
+</table>
+<p>
+  Because every render is from the original, step 6 (vibrance 0.15) is genuinely <em>less</em> saturated than step 2
+  (vibrance 0.45) — not an inverse op piled on. Full trail: <code>samples/sprint1_config_trail.md</code>,
+  raw stream: <code>samples/sprint1_parametric_stream.txt</code>.
+</p>
+
+<h2>🐞 Bug found &amp; fixed: vibrance "neon" <span class="pill bug">pre-existing</span> <span class="pill ok">fixed</span></h2>
+<div class="callout">
+  <p><strong>Symptom (Kyle's report):</strong> "the image gets over-processed and can't be corrected." The agent kept
+  declaring the render psychedelic and dialing vibrance down, yet the image stayed neon — so it could never converge.</p>
+  <p><strong>Root cause:</strong> <code>src/server/utils/pixels.ts</code> <code>applyVibrance</code> used
+  <code>newS = s + amount·(1 − s)</code>. The <code>(1 − s)</code> term boosts <em>low</em>-saturation pixels the
+  <em>most</em>, so at amount 0.45 every faintly-tinted gray (clouds, buildings) was shoved to ~0.45 saturation and pure
+  grays picked up a red cast from the undefined-hue→0 fallback. Pre-existing in the batch model; the parametric model
+  surfaces it on every render.</p>
+  <p><strong>Bisected</strong> with direct <code>renderConfig</code> calls: exposure+contrast alone = beautiful;
+  vibrance alone = neon. <strong>Fix:</strong> make the boost saturation-proportional —
+  <code>newS = s + amount·s·(1 − s)</code> — so neutrals stay neutral, muted mid-saturation colors get the lift, and
+  vivid colors are protected.</p>
+</div>
+
+<h3>Same config (<code>exposure 0.4, contrast 0.3, vibrance 0.45, …</code>), before vs after the fix</h3>
+<div class="grid2">
+  <figure>
+    <img src="screenshots/before_neon_vibrance_bug.jpg" alt="Neon psychedelic render before the fix">
+    <figcaption><strong>Before</strong> — radioactive neon: teal buildings, magenta sky, green water (236 KB).</figcaption>
+  </figure>
+  <figure>
+    <img src="screenshots/after_fixed_same_config.jpg" alt="Clean natural render after the fix">
+    <figcaption><strong>After</strong> — natural, punchy, the intended "pop" (184 KB). Same config.</figcaption>
+  </figure>
+</div>
+
+<h3>End-to-end after the fix: original → converged result</h3>
+<div class="grid2">
+  <figure>
+    <img src="screenshots/original.jpg" alt="Original flat, dark, tilted sunset">
+    <figcaption><strong>Original</strong> — dark, flat, tilted.</figcaption>
+  </figure>
+  <figure>
+    <img src="screenshots/after_fixed_converged.jpg" alt="Converged punchy leveled result">
+    <figcaption><strong>Converged</strong> — leveled horizon, punchy, vibrant, no neon. Agent stopped on its own
+      <code>done</code> (not the cap), 0 errors.</figcaption>
+  </figure>
+</div>
+<p class="meta">Follow-up (not blocking): the agent still takes many small steps to converge (it re-nudges the straighten
+  angle a lot) — a prompt/guide tuning matter, separate from the architecture. Output is correct.</p>
+
+<h2>Sprint 2 — Config-snapshot branching + docs/UI <span class="pill ok">verified</span></h2>
+<p>
+  Per-step config snapshots (<code>step-NN.json</code>); <code>fromStep</code> now seeds the agent with that step's
+  stored <em>config</em> (the natural parametric meaning of "continue from here"); client "batch" vocabulary → "step";
+  docs reconciled (SKILL / README / spec frozen note); grep gate guards against stale claims.
+</p>
+<p>
+  <strong>Branch verified:</strong> a <code>fromStep: 2</code> run carried step 2's stored <code>sharpen 0.25</code> /
+  <code>vibrance 0.2</code> forward (proof it seeded the snapshot, not defaults), rendered the seed from the original,
+  and appended new frames after the existing 17 — prior frames intact.
+</p>
+
+<div class="grid2">
+  <figure>
+    <img src="screenshots/sprint2_setup.png" alt="Setup view">
+    <figcaption>Setup view — drop/sample + intent + Run.</figcaption>
+  </figure>
+  <figure>
+    <img src="screenshots/sprint2_running.png" alt="Running view with steps and slider-diff chips">
+    <figcaption>Running view — large live preview + timeline. Note the <strong>"N steps"</strong> badge (not "batches")
+      and the per-step <strong>slider-diff chips</strong>.</figcaption>
+  </figure>
+</div>
+
+<h2>🐞 Bug found &amp; fixed: lightbox opened the wrong frame <span class="pill ok">fixed</span></h2>
+<div class="callout">
+  <p><strong>Symptom (Kyle's report):</strong> "the preview image on the card doesn't match the image that pops up in
+  the modal." Clicking a thumbnail could open the modal on <strong>Original</strong>.</p>
+  <p><strong>Root cause:</strong> <code>openLightbox</code> resolved the frame by reconstructing a <code>Step N</code>
+  label and doing a <code>findIndex</code> that <strong>silently fell back to index 0 (Original) on any miss</strong>.
+  The terminal <code>done</code> card's <code>step</code> number has no own frame (its thumbnail aliases the last applied
+  frame), so it always missed → Original.</p>
+  <p><strong>Fix:</strong> resolve the frame by the <strong><code>imageUrl</code> path the thumbnail is actually
+  showing</strong> (cache-buster stripped), with the label as fallback — the modal now always matches the clicked
+  thumbnail, and the <code>done</code> card opens its underlying frame.</p>
+</div>
+<figure>
+  <img src="screenshots/lightbox_fixed_matches_thumbnail.png" alt="Lightbox showing the correct Step 1 frame">
+  <figcaption>After the fix — clicking the terminal <code>done</code> card opens <strong>"Step 1" (2/2)</strong> with the
+    correct image and chips, not Original.</figcaption>
+</figure>
+
+<h2>Status</h2>
+<div class="callout good">
+  <ul>
+    <li>Sprint 1 (parametric core) — <strong>complete</strong>, typecheck/lint/grep clean, live curl verified.</li>
+    <li>Sprint 2 (branching + docs/UI) — <strong>complete</strong>, branch + in-browser verified.</li>
+    <li>2 bugs found during verification (vibrance neon, lightbox frame mismatch) — <strong>both fixed &amp; verified</strong>.</li>
+    <li>Nothing committed — changes are in the working tree for review.</li>
+  </ul>
+</div>
+
+</div>
+</body>
+</html>
