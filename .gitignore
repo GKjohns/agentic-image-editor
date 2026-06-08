@@ -1,0 +1,17 @@
+# OS
+.DS_Store
+
+# Editor
+.vscode
+.idea
+
+# Session working data (intermediates written by the edit executor)
+.data/
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Anything node-ish that escapes the src/ .gitignore
+node_modules/
