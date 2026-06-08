@@ -2,7 +2,7 @@ import { writeFile, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import sharp from 'sharp'
-import type { Operation } from '~~/shared/types'
+import type { DevelopConfig, Operation } from '~~/shared/types'
 import {
   applyChannelLut,
   applyGrayscale,
@@ -317,6 +317,54 @@ export class EditExecutor {
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
+  }
+
+  /**
+   * Render a full develop config FROM the original, every iteration. Builds the
+   * ordered `Operation[]` from the config's NON-IDENTITY fields (canonical order:
+   * straighten → exposure → tone → whiteBalance → contrast → vibrance →
+   * saturation → look → sharpen), then chains them via `applyBatch`. This is what
+   * makes the model non-destructive: "less contrast" re-renders from scratch with
+   * a lower contrast, never an inverse op piled on the prior frame.
+   *
+   * An all-identity config produces a plain re-encode of the original (we must
+   * NOT call `applyBatch` with [] — it throws).
+   */
+  async renderConfig(originalPath: string, config: DevelopConfig): Promise<Buffer> {
+    const ops: Operation[] = []
+
+    if (config.straighten !== 0) {
+      ops.push({ tool: 'straighten', params: { angleDeg: config.straighten } })
+    }
+    if (config.exposure !== 0) {
+      ops.push({ tool: 'exposure', params: { ev: config.exposure } })
+    }
+    if (config.highlights !== 0 || config.shadows !== 0) {
+      ops.push({ tool: 'tone', params: { highlights: config.highlights, shadows: config.shadows } })
+    }
+    if (config.temp !== 0 || config.tint !== 0) {
+      ops.push({ tool: 'whiteBalance', params: { temp: config.temp, tint: config.tint } })
+    }
+    if (config.contrast !== 0) {
+      ops.push({ tool: 'contrast', params: { amount: config.contrast } })
+    }
+    if (config.vibrance !== 0) {
+      ops.push({ tool: 'vibrance', params: { amount: config.vibrance } })
+    }
+    if (config.saturation !== 1) {
+      ops.push({ tool: 'saturation', params: { amount: config.saturation } })
+    }
+    if (config.look !== 'none') {
+      ops.push({ tool: 'look', params: { name: config.look } })
+    }
+    if (config.sharpen !== 0) {
+      ops.push({ tool: 'sharpen', params: { amount: config.sharpen } })
+    }
+
+    if (ops.length === 0) {
+      return sharp(originalPath).jpeg({ quality: 90 }).toBuffer()
+    }
+    return this.applyBatch(originalPath, ops)
   }
 }
 

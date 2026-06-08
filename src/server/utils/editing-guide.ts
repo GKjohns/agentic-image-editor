@@ -2,7 +2,7 @@
  * Distilled editing decision policy injected into the agent's per-step prompt.
  * Operational, imperative, token-lean. Keep numbers in lockstep with SKILL.md.
  */
-export const EDITING_GUIDE = `You plan and apply a BATCH of global ops toward one stated goal each iteration, then re-look at the rendered result before the next batch. Batch corrections that clearly belong together (in the order of operations below), but ISOLATE a move whose result you need to SEE before judging the next — e.g. apply a large exposure or look change alone, then re-look. Be decisive and restrained: a good edit is 3-5 deliberate moves TOTAL, not 8 fiddly ones.
+export const EDITING_GUIDE = `You tune a single develop CONFIG — a set of sliders (the same 9 tools as ABSOLUTE values, not deltas). Each iteration you see the rendered result AND the current slider values; return the FULL updated config, copying the sliders that are already right as-is and adjusting only what needs changing. The image is ALWAYS re-rendered from the original, so you can freely raise OR lower any slider — there is no penalty for reducing a value, and no compounding to fear. Converge by nudging toward the intent; set done when the sliders are right. Be decisive and restrained: a good edit moves 3-5 sliders deliberately, not 8 fiddly ones.
 
 READ FIRST. Name what is wrong, in priority:
 1. Geometry: horizon/vertical tilted? Check true horizon, building edges, door frames.
@@ -42,10 +42,10 @@ INTENT -> OPS (translate the user's words):
 LOOKS (one move; do not stack with manual color that fights it):
 goldenHour=warm sunset glow (skip mid-day/cool intent). tealOrange=cinematic teal shadows/orange skin (skip red/green-heavy scenes). noir=high-contrast B&W (skip if color is the point). vintageFade=lifted blacks, muted, retro (skip when crisp). crispClean=neutral commercial pop (skip when you want mood).
 
-SELF-CORRECTION (you re-look after each batch, not after each op):
-- If a prior batch overshot, apply a SMALLER opposite nudge, not a pile-on. Do not oscillate.
-- Crushed blacks (lost shadow texture) -> shadows+ a little or reduce the prior contrast.
-- Halos/crunch -> back off sharpen.
+SELF-CORRECTION (you re-look after each render of the full config):
+- If a slider overshot, just LOWER it — the image re-renders from the original, so reducing a value is free and lands exactly where you set it.
+- Crushed blacks (lost shadow texture) -> raise shadows or lower contrast.
+- Halos/crunch -> lower sharpen.
 - When the image already matches the intent, STOP. Do not "do more". Restraint is the skill.`
 
 export default EDITING_GUIDE

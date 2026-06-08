@@ -1,8 +1,8 @@
 import { createUIMessageStream, createUIMessageStreamResponse } from 'ai'
-import type { Operation, Phase, StepEvent } from '~~/shared/types'
+import type { DevelopConfig, StepEvent } from '~~/shared/types'
 import { storage } from '~~/server/utils/storage'
 import { executor } from '~~/server/utils/executor'
-import { decideNextBatch, type HistoryEntry } from '~~/server/utils/agent'
+import { decideConfig, diffConfig, equalConfig } from '~~/server/utils/agent'
 
 interface EditRequestBody {
   id?: string
@@ -16,37 +16,10 @@ interface EditRequestBody {
   fromStep?: number | 'original'
 }
 
-/** Soft prior the planner is biased to move through (not enforced). */
-const PHASE_ORDER: Phase[] = ['straighten', 'exposure', 'tone', 'color', 'creative', 'finish']
-
-/**
- * True when an operation's params are effectively identity (no visible change),
- * so applying it would burn a step for nothing. Identity per tool:
- *   straighten angle≈0; exposure ev≈0; contrast/vibrance/sharpen amount≈0;
- *   saturation amount≈1; tone both≈0; whiteBalance both≈0.
- * (look has no identity — a named grade always does something.)
- */
-function isNoOp(op: Operation): boolean {
-  const p = op.params
-  const z = (v: unknown, eps = 1e-3) => Math.abs(Number(v) || 0) <= eps
-  switch (op.tool) {
-    case 'straighten': return z(p.angleDeg, 0.05)
-    case 'exposure': return z(p.ev, 0.02)
-    case 'contrast': return z(p.amount, 0.02)
-    case 'vibrance': return z(p.amount, 0.02)
-    case 'sharpen': return z(p.amount, 0.02)
-    case 'saturation': return Math.abs((Number(p.amount) || 1) - 1) <= 0.02
-    case 'tone': return z(p.highlights, 0.5) && z(p.shadows, 0.5)
-    case 'whiteBalance': return z(p.temp, 0.5) && z(p.tint, 0.5)
-    case 'look': return false
-  }
-}
-
-// NOTE (Sprint 1): the cross-batch flip-flop / reversal guardrail was REMOVED for
-// the batching model. With multi-op batches, a same-tool sign flip across batches
-// is often legitimate convergence and is hard to judge cheaply. For v1 we rely on
-// the model's own done-judgment plus the MAX_STEPS iteration cap to halt, and keep
-// only the no-op guard below (an empty / all-identity batch ends the run).
+// NOTE: in the parametric model there is no per-step no-op filter — the loop's
+// converge guard (model `done`, OR the returned config equals the current one)
+// halts the run. The image is always re-rendered from the original, so any slider
+// may move up or down freely; only "nothing changed" terminates.
 
 export default defineEventHandler(async (event) => {
   const { id, intent, fromStep } = await readBody<EditRequestBody>(event)
@@ -94,10 +67,8 @@ export default defineEventHandler(async (event) => {
 
   const runtimeConfig = useRuntimeConfig(event)
   const model = runtimeConfig.agentModel
-  // MAX_STEPS = max re-look iterations (each iteration applies a batch of ops).
+  // MAX_STEPS = max re-look iterations (each re-renders the full config).
   const MAX_STEPS = parseInt(runtimeConfig.maxSteps) || 30
-  // Per-batch hard cap on operations (over-cap lines are dropped server-side).
-  const MAX_OPS_PER_BATCH = parseInt(runtimeConfig.maxOpsPerBatch) || 6
 
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
@@ -113,8 +84,14 @@ export default defineEventHandler(async (event) => {
         })
       }
 
+      // The agent holds ONE develop config of absolute slider values; the server
+      // re-renders the full ordered stack FROM the original every iteration. A
+      // branch ("continue from here") seeds from the base step's stored config
+      // snapshot — `'original'` (or a missing sidecar) falls back to DEFAULT_CONFIG,
+      // identical to a fresh run.
+      let currentConfig: DevelopConfig = await storage.readConfig(id, baseStep)
       let currentPath = storage.pathFor(id, baseStep)
-      const history: HistoryEntry[] = []
+      let editCount = 0 // configs actually rendered (for the cap-hit summary)
       let lastStep = startOffset // last frame number we emitted
       // The result frame to fall back to. When branching, the base frame itself is
       // a valid prior result; when starting fresh from original it's 0 (none yet).
@@ -126,31 +103,32 @@ export default defineEventHandler(async (event) => {
         const step = startOffset + iter
         lastStep = step
         try {
-          const decision = await decideNextBatch(
+          const decision = await decideConfig(
             {
               originalPath: storage.pathFor(id, 'original'),
               currentPath,
               intent,
-              history,
-              phasePrior: PHASE_ORDER
+              currentConfig
             },
-            model,
-            MAX_OPS_PER_BATCH
+            model
           )
 
-          // Ephemeral "deciding" card update (batch-shaped).
+          const next = decision.config
+
+          // Ephemeral "deciding" card update — chips show this step's diff.
           emit({
             step,
             status: 'deciding',
             assessment: decision.assessment,
             goal: decision.goal,
-            operations: decision.operations,
+            operations: diffConfig(currentConfig, next),
             reason: decision.reason,
             phase: decision.phase
           }, true)
 
-          // Model stopped (done, or an empty parsed batch → safe stop).
-          if (decision.done || decision.operations.length === 0) {
+          // Converged: model says done, OR the returned config is identical to the
+          // current one (nothing left to change). Keep the last applied frame.
+          if (decision.done || equalConfig(next, currentConfig)) {
             emit({
               step,
               status: 'done',
@@ -165,29 +143,15 @@ export default defineEventHandler(async (event) => {
             return
           }
 
-          // --- Guardrail: no-op batch. Every op in the batch is effectively
-          // identity → applying it would burn an iteration for nothing. Stop,
-          // keeping the last applied frame.
-          const effectiveOps = decision.operations.filter(op => !isNoOp(op))
-          if (effectiveOps.length === 0) {
-            emit({
-              step,
-              status: 'done',
-              assessment: decision.assessment,
-              goal: decision.goal,
-              reason: `${decision.reason} (chosen batch had no effect — stopping)`,
-              phase: decision.phase,
-              imageUrl: lastAppliedStep > 0
-                ? `/api/image/${id}/${lastAppliedStep}?t=${Date.now()}`
-                : undefined
-            })
-            return
-          }
-
-          const buf = await executor.applyBatch(currentPath, effectiveOps)
+          // Render the FULL config from the original — no compounding.
+          const prevConfig = currentConfig
+          const buf = await executor.renderConfig(storage.pathFor(id, 'original'), next)
           await storage.writeStep(id, step, buf)
+          await storage.writeConfig(id, step, next)
+          currentConfig = next
           currentPath = storage.pathFor(id, step)
           lastAppliedStep = step
+          editCount++
 
           emit({
             step,
@@ -197,14 +161,11 @@ export default defineEventHandler(async (event) => {
             imageUrl: `/api/image/${id}/${step}?t=${Date.now()}`,
             assessment: decision.assessment,
             goal: decision.goal,
-            operations: effectiveOps,
+            operations: diffConfig(prevConfig, next),
+            config: next,
             reason: decision.reason,
             phase: decision.phase
           })
-
-          for (const op of effectiveOps) {
-            history.push({ tool: op.tool, params: op.params })
-          }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           emit({
@@ -221,7 +182,7 @@ export default defineEventHandler(async (event) => {
       emit({
         step: lastStep + 1,
         status: 'done',
-        assessment: `Reached the ${MAX_STEPS}-iteration limit with ${history.length} edits applied.`,
+        assessment: `Reached the ${MAX_STEPS}-iteration limit with ${editCount} renders applied.`,
         reason: 'Stopping at the iteration cap; the last applied frame is the final result.',
         imageUrl: lastAppliedStep > 0
           ? `/api/image/${id}/${lastAppliedStep}?t=${Date.now()}`

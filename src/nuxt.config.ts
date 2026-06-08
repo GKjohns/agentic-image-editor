@@ -21,8 +21,7 @@ export default defineNuxtConfig({
   // We surface model + step-cap here so they're swappable via env without code changes.
   runtimeConfig: {
     agentModel: process.env.AGENT_MODEL || 'anthropic/claude-sonnet-4-6',
-    maxSteps: process.env.MAX_STEPS || '30',
-    maxOpsPerBatch: process.env.MAX_OPS_PER_BATCH || '6'
+    maxSteps: process.env.MAX_STEPS || '30'
   },
 
   compatibilityDate: '2025-01-15',

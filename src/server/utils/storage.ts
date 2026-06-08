@@ -2,6 +2,8 @@ import { mkdir, writeFile, readFile, readdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import sharp from 'sharp'
+import type { DevelopConfig } from '~~/shared/types'
+import { DEFAULT_CONFIG } from '~~/shared/types'
 
 /**
  * Local-filesystem session storage over `.data/sessions/<id>/`.
@@ -13,6 +15,7 @@ import sharp from 'sharp'
  * Layout per session:
  *   .data/sessions/<id>/original.jpg
  *   .data/sessions/<id>/step-01.jpg, step-02.jpg, ...
+ *   .data/sessions/<id>/step-01.json, ...   (the DevelopConfig snapshot per step)
  */
 export class LocalStorageAdapter {
   /** Absolute path to `.data/sessions`. Nitro dev runs cwd at the project root. */
@@ -54,6 +57,31 @@ export class LocalStorageAdapter {
   /** Write a step result as `step-NN.jpg`. */
   async writeStep(id: string, step: number, buffer: Buffer): Promise<void> {
     await writeFile(this.pathFor(id, step), buffer)
+  }
+
+  /**
+   * Write the develop config snapshot for a step as `step-NN.json` (same NN
+   * zero-pad as the frame). This is the parametric "preset" that produced the
+   * frame — branching ("continue from here") seeds the agent from it.
+   */
+  async writeConfig(id: string, step: number, config: DevelopConfig): Promise<void> {
+    const path = this.pathFor(id, step).replace(/\.jpg$/, '.json')
+    await writeFile(path, JSON.stringify(config))
+  }
+
+  /**
+   * Read the develop config snapshot for `'original'` or step N. Returns
+   * `DEFAULT_CONFIG` for `'original'` and as a graceful fallback when the sidecar
+   * is missing or unreadable (older sessions have no `.json`).
+   */
+  async readConfig(id: string, step: 'original' | number): Promise<DevelopConfig> {
+    if (step === 'original') return DEFAULT_CONFIG
+    const path = this.pathFor(id, step).replace(/\.jpg$/, '.json')
+    try {
+      return JSON.parse(await readFile(path, 'utf8')) as DevelopConfig
+    } catch {
+      return DEFAULT_CONFIG
+    }
   }
 
   /** Read the bytes for `'original'` or step N. Throws if missing. */

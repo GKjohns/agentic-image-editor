@@ -33,24 +33,61 @@ export interface Operation {
   params: Record<string, number | string>
 }
 
+/** The five named creative grades a `look` can apply. */
+export type LookName = 'goldenHour' | 'tealOrange' | 'noir' | 'vintageFade' | 'crispClean'
+
+/**
+ * The full non-destructive develop "preset": one ABSOLUTE value per slider
+ * (not a delta). The server renders it from the original in a fixed order every
+ * iteration, so any slider can move up or down freely with no compounding.
+ */
+export interface DevelopConfig {
+  straighten: number // angleDeg  -45..45   (0 = none)
+  exposure: number // ev        -3..3     (0 = none)
+  highlights: number // tone      -100..100 (0 = none)
+  shadows: number // tone      -100..100 (0 = none)
+  temp: number // WB temp   -100..100 (0 = none)
+  tint: number // WB tint   -100..100 (0 = none)
+  contrast: number // -1..1     (0 = none)
+  vibrance: number // -1..1     (0 = none)
+  saturation: number // 0..2 multiplier (1 = none)
+  sharpen: number // 0..1      (0 = none)
+  look: LookName | 'none'
+}
+
+/** Identity config: every slider at its no-change value. */
+export const DEFAULT_CONFIG: DevelopConfig = {
+  straighten: 0,
+  exposure: 0,
+  highlights: 0,
+  shadows: 0,
+  temp: 0,
+  tint: 0,
+  contrast: 0,
+  vibrance: 0,
+  saturation: 1,
+  sharpen: 0,
+  look: 'none'
+}
+
 /**
  * Structured output of one decision call (vision + structured in one shot).
- * As of Sprint 1 the agent reasons in BATCHES: it states a `goal` and proposes a
- * list of `operations` to apply together before the next re-look. `operations`
- * is empty when `done` (the goal is met → terminal stop).
+ * The agent holds a single develop `config` of absolute slider values, looks at
+ * the rendered result, and returns the FULL updated config (with `done` when the
+ * intent is met → terminal stop).
  */
 export interface Decision {
   /** What the model sees in the current image vs. the intent. */
   assessment: string
-  /** True when the goal is met — loop stops, no operations applied. */
+  /** True when the goal is met — loop stops, no new frame rendered. */
   done: boolean
-  /** Which phase this batch belongs to. */
+  /** Which phase this step belongs to. */
   phase: Phase
-  /** One-line statement of what this batch of ops is trying to accomplish. */
+  /** One-line statement of what this step is trying to accomplish. */
   goal: string
-  /** The ops to apply this iteration, in order. Empty when done. */
-  operations: Operation[]
-  /** Why this batch is the right next move. */
+  /** The full updated develop config (absolute slider values). */
+  config: DevelopConfig
+  /** Why this config is the right next move. */
   reason: string
 }
 
@@ -69,10 +106,12 @@ export interface StepEvent {
   assessment?: string
   reason?: string
   phase?: Phase
-  /** One-line goal the batch is working toward (Sprint 1 batching). */
+  /** One-line goal this step is working toward. */
   goal?: string
-  /** The batch of ops decided/applied this iteration (Sprint 1 batching). */
+  /** The sliders this step CHANGED (config diff), rendered as timeline chips. */
   operations?: Operation[]
+  /** The full develop config after this step (absolute slider values). */
+  config?: DevelopConfig
   /**
    * Single-op field kept for backward compat with TimelineStep.vue. The server
    * no longer populates it; new clients should read `operations`.

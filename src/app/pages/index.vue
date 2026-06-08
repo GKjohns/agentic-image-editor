@@ -68,7 +68,7 @@ const lastAppliedStep = computed(() => {
 })
 
 // The effective result step honours a manual `resultStep` override (used by
-// "Use this as result" and "Undo last batch"), else the last applied frame.
+// "Use this as result" and "Undo last step"), else the last applied frame.
 const effectiveResultStep = computed(() => resultStep.value ?? lastAppliedStep.value)
 
 // The final / download image is the effective result frame's image.
@@ -126,7 +126,7 @@ function newImage() {
 const lightboxOpen = ref(false)
 const lightboxIndex = ref(0)
 
-// Frames for the lightbox + prev/next paging: original → each applied batch.
+// Frames for the lightbox + prev/next paging: original → each applied step.
 const lightboxFrames = computed<LightboxFrame[]>(() => {
   const frames: LightboxFrame[] = []
   if (sessionId.value) {
@@ -137,7 +137,7 @@ const lightboxFrames = computed<LightboxFrame[]>(() => {
   for (const s of appliedSteps.value) {
     frames.push({
       imageUrl: s.imageUrl!,
-      label: `Batch ${s.step}`,
+      label: `Step ${s.step}`,
       goal: s.goal,
       operations: s.operations
     })
@@ -145,11 +145,30 @@ const lightboxFrames = computed<LightboxFrame[]>(() => {
   return frames
 })
 
-/** Open the lightbox on the frame for a given step number (or original). */
-function openLightbox(step: number | 'original') {
-  const idx = step === 'original'
-    ? lightboxFrames.value.findIndex(f => f.label === 'Original')
-    : lightboxFrames.value.findIndex(f => f.label === `Batch ${step}`)
+/** Strip the `?t=` cache-buster so two URLs for the same frame compare equal. */
+function framePath(url?: string): string {
+  return url ? url.split('?')[0]! : ''
+}
+
+/**
+ * Open the lightbox on a given frame. We resolve the index by the IMAGE the
+ * thumbnail is actually showing (`imageUrl` path) first, so the modal always
+ * matches the clicked thumbnail — this is what makes the terminal `done` card
+ * (whose `step` number has no own frame; its image aliases the last applied
+ * frame) open the right image instead of silently falling back to Original.
+ * The `Step N` / `Original` label is a fallback when no imageUrl is given.
+ */
+function openLightbox(step: number | 'original', imageUrl?: string) {
+  let idx = -1
+  if (imageUrl) {
+    const target = framePath(imageUrl)
+    idx = lightboxFrames.value.findIndex(f => framePath(f.imageUrl) === target)
+  }
+  if (idx < 0) {
+    idx = step === 'original'
+      ? lightboxFrames.value.findIndex(f => f.label === 'Original')
+      : lightboxFrames.value.findIndex(f => f.label === `Step ${step}`)
+  }
   lightboxIndex.value = idx >= 0 ? idx : 0
   lightboxOpen.value = true
 }
@@ -174,8 +193,8 @@ function useAsResult(step: number) {
   resultStep.value = step
 }
 
-/** "Undo last batch": revert the result to the second-to-last applied frame. */
-function undoLastBatch() {
+/** "Undo last step": revert the result to the second-to-last applied frame. */
+function undoLastStep() {
   const a = appliedSteps.value
   if (a.length < 2) return
   resultStep.value = a[a.length - 2]!.step
@@ -319,11 +338,11 @@ function stop() {
         <UButton
           v-if="canUndo"
           icon="i-lucide-undo-2"
-          label="Undo last batch"
+          label="Undo last step"
           color="neutral"
           variant="subtle"
           size="sm"
-          @click="undoLastBatch"
+          @click="undoLastStep"
         />
         <UButton
           icon="i-lucide-sliders-horizontal"
@@ -466,7 +485,7 @@ function stop() {
               variant="subtle"
               size="sm"
             >
-              {{ steps.length }} {{ steps.length === 1 ? 'batch' : 'batches' }}
+              {{ steps.length }} {{ steps.length === 1 ? 'step' : 'steps' }}
             </UBadge>
           </div>
 
@@ -476,7 +495,7 @@ function stop() {
               :key="s.step"
               :step="s"
               :is-result="s.step === effectiveResultStep"
-              @open="openLightbox(s.step)"
+              @open="openLightbox(s.step, s.imageUrl)"
               @continue="continueFrom(s.step)"
               @use-as-result="useAsResult(s.step)"
             />

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Operation } from '#shared/types'
 
-/** A frame the lightbox can show — built from the original, a batch, or final. */
+/** A frame the lightbox can show — built from the original, a step, or final. */
 export interface LightboxFrame {
   imageUrl: string
   label: string

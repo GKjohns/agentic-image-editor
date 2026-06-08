@@ -2,10 +2,13 @@
 
 A single-page Nuxt tool: drop an image, type a natural-language edit intent (e.g.
 _"straighten the horizon, brighten it, make it pop"_), and watch a **vision-in-the-loop
-agent** edit it step by step. Each iteration the model **looks at the current rendered image**,
-states a sub-goal and decides a **batch** of editing operations, the server applies them with
-Sharp, and the loop continues until the model judges the goal met (or hits a step cap). The
-live timeline streaming each batch's goal, ops + result is the centerpiece.
+agent** edit it step by step. The agent tunes a single non-destructive **develop config**
+(one absolute value per slider). Each iteration the model **looks at the current rendered
+image**, states a sub-goal and returns the full updated config, and the server **re-renders
+the whole stack from the original** with Sharp — so any slider can move up or down freely
+with no compounding. The loop continues until the model judges the goal met or the config
+stops changing (or hits the iteration cap). The live timeline streaming each pass's goal,
+changed sliders + result is the centerpiece.
 
 ## Quick start
 
@@ -29,24 +32,28 @@ No image handy? The UI ships sample photos (a "No image? Try a sample" picker) �
 Browser (app/pages/index.vue)
   1. POST /api/session  (FormData: image)        → writes .data/sessions/<id>/original.jpg → { id }
   2. POST /api/edit     { id, intent, fromStep? }  (stream)  → server runs the MANUAL vision loop:
+        config = fromStep ? readConfig(id, fromStep) : DEFAULT_CONFIG   // seed preset
         for step in 1..MAX_STEPS:
-          decision = generateObject({ model: <gateway>, image: current, schema })  // vision + structured
-          emit data-step { status:'deciding', goal, operations[], assessment, reason }
-          if decision.done: break
-          for op in decision.operations (≤ MAX_OPS_PER_BATCH):                      // Sharp
-            current = executor.apply(current, op)
-          emit data-step { status:'applied', imageUrl:/api/image/<id>/<step> }
+          next = decideConfig({ model: <gateway>, image: current, currentConfig: config })  // vision + FULL config
+          emit data-step { status:'deciding', goal, operations[], config, assessment, reason }
+          if next.done || equalConfig(next, config): break               // done or converged
+          current = executor.renderConfig(original, next)                 // re-render from ORIGINAL
+          writeStep(id, step, current); writeConfig(id, step, next)
+          emit data-step { status:'applied', operations[], config, imageUrl:/api/image/<id>/<step> }
+          config = next
   3. GET  /api/image/<id>/<step>                  → serves each intermediate / final jpg
 
-     `/api/edit` also accepts an optional `fromStep` (planned, Sprint 3) — resume the loop
-     from a chosen earlier frame instead of the original.
+     `/api/edit` also accepts an optional `fromStep` — resume the loop from a chosen earlier
+     frame by seeding the agent with that step's stored config snapshot (`step-NN.json`)
+     instead of the identity config, then re-rendering from the original.
 ```
 
 The loop is **manual** (not the AI SDK auto tool-roundtrip) so the model sees *new pixels*
 each iteration — that's what makes it self-correcting. Decisions stream over the AI SDK
 UI-message stream (`createUIMessageStream` + custom `data-step` parts) and the client
 consumes them with a plain `fetch` + SSE reader. Each `data-step` part carries
-`{ goal, operations[] }` — the batch's stated sub-goal and the ops applied that iteration
+`{ goal, operations[], config }` — the pass's stated sub-goal, the sliders it *changed*
+(the per-step config diff, rendered as chips), and the full develop config after the pass
 (a legacy single `operation?` field remains in the type for back-compat but is no longer
 populated).
 
@@ -55,11 +62,12 @@ populated).
 - **`server/utils/storage.ts`** — `StorageAdapter`. v1 = local `.data/sessions/<id>/`. Later = Blob / Sandbox FS.
 - **`server/utils/executor.ts`** — `EditExecutor.apply(path, op) → Buffer`. v1 = in-process Sharp. Later = Sandbox.
 - **`server/utils/tools.ts`** — the tool registry (`describeTools()` feeds the prompt; also the source of truth for the decision schema).
-- **`server/utils/agent.ts`** — `decideNextEdit()` (the `generateObject` vision call).
+- **`server/utils/agent.ts`** — `decideConfig()` (the `generateObject` vision call that returns the full develop config).
 
 ## Toolset (Sharp + raw-buffer pixel math — no ImageMagick)
 
-The agent chooses a batch of ops per iteration (each toward a stated sub-goal). Everything
+The agent returns a full develop config per iteration (toward a stated sub-goal), and the
+server renders the non-identity sliders in the order below from the original. Everything
 runs in-process: Sharp for geometry/encode,
 raw-buffer (`sharp().raw()`) pixel math for the tonal/color curves. No external binary —
 which also keeps the future Vercel Sandbox path clean. Pure helpers live in `server/utils/pixels.ts`.
@@ -78,8 +86,9 @@ which also keeps the future Vercel Sandbox path clean. Pure helpers live in `ser
 
 The agent's editing judgment — order of operations, target values, intent→ops translation —
 lives in [`../SKILL.md`](../SKILL.md) (human playbook) and `server/utils/editing-guide.ts`
-(the distilled policy injected into every decision prompt). The loop has no-op / oscillation
-detection (force-stop keeps the pre-oscillation frame) on top of the `MAX_STEPS` cap.
+(the distilled policy injected into every decision prompt). The loop converges when the
+model sets `done` or returns a config identical to the current one (nothing left to change),
+on top of the `MAX_STEPS` cap.
 
 ## Environment
 
@@ -87,8 +96,7 @@ detection (force-stop keeps the pre-oscillation frame) on top of the `MAX_STEPS`
 |----------|----------|-------------|
 | `AI_GATEWAY_API_KEY` | Yes | Vercel AI Gateway key. Routes the vision model. |
 | `AGENT_MODEL` | No | Gateway model string (default `anthropic/claude-sonnet-4-6`). Swap providers without code changes. |
-| `MAX_STEPS` | No | Agent loop hard cap (default 30). Since Sprint 1 each iteration applies a *batch*, so this now caps **re-look iterations** (kept as `MAX_STEPS` — no rename). |
-| `MAX_OPS_PER_BATCH` | No | Max ops the executor applies per batch/iteration (default 6). Excess ops in a batch are dropped. |
+| `MAX_STEPS` | No | Agent loop hard cap (default 30). Caps the number of **re-look iterations** (each re-renders the develop config). |
 
 ## Deferred (see `internal_docs/`)
 

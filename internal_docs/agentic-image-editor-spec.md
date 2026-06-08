@@ -1,5 +1,7 @@
 # Agentic Image Editor — One-Pager
 
+> **Frozen — historical record.** This is the original v1 one-pager (sequential single-op model). It is kept as-is for the record and does NOT describe the current parametric develop-config model; see `internal_docs/20260608_parametric_develop_config/implementation_plan.md` for what shipped.
+
 ## Summary
 
 A single-page Nuxt tool that takes an **image** plus a **natural-language edit description** and produces an edited image through an **iterative, vision-in-the-loop agent**. Each iteration the model looks at the current image, compares it to the user's intent, applies one editing operation, then re-evaluates — continuing until it judges the goal met (or hits an iteration cap).

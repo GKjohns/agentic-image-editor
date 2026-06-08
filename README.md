@@ -1,6 +1,6 @@
 # Agentic Image Editor
 
-A single-page Nuxt tool that takes an **image** plus a **natural-language edit description** and produces an edited image through an **iterative, vision-in-the-loop agent**. Each step the model looks at the current image, compares it to the user's intent, applies a **batch** of operations toward a stated sub-goal, then re-evaluates — continuing until it judges the goal met (or hits an iteration cap).
+A single-page Nuxt tool that takes an **image** plus a **natural-language edit description** and produces an edited image through an **iterative, vision-in-the-loop agent**. Each step the model looks at the current image, compares it to the user's intent, and tunes a **develop config** (one absolute value per slider) toward a stated sub-goal; the server re-renders from the original each pass, then re-evaluates — continuing until it judges the goal met (or hits an iteration cap).
 
 This is the closed-loop version of the manual Lightroom workflow: the model stays in the loop and self-corrects instead of handing back to a human between edits.
 

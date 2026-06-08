@@ -57,17 +57,17 @@ function opLabel(op: Operation): string {
 }
 
 /**
- * The batch's ops as compact chips (Sprint 1 batching). Falls back to the legacy
- * single `operation` field only if `operations` is absent.
+ * The step's changed-slider ops as compact chips (the config diff). Falls back to
+ * the legacy single `operation` field only if `operations` is absent.
  */
 const opChips = computed<string[]>(() => {
-  const batch = props.step.operations
-  if (batch && batch.length) return batch.map(opLabel)
+  const ops = props.step.operations
+  if (ops && ops.length) return ops.map(opLabel)
   if (props.step.operation) return [opLabel(props.step.operation)]
   return []
 })
 
-/** The batch's stated sub-goal — the card title. */
+/** The step's stated sub-goal — the card title. */
 const goal = computed(() => props.step.goal ?? null)
 
 const isDeciding = computed(() => props.step.status === 'deciding')
@@ -149,7 +149,7 @@ const isError = computed(() => props.step.status === 'error')
         </UBadge>
       </div>
 
-      <!-- Op chips: one compact chip per operation in the batch -->
+      <!-- Op chips: one compact chip per slider the step changed -->
       <div
         v-if="opChips.length"
         class="flex flex-wrap gap-1.5"
