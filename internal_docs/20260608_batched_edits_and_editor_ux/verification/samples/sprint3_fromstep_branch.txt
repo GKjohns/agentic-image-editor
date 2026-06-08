@@ -1,0 +1,26 @@
+Sprint 3 — fromStep branch verification (append, not overwrite)
+Session: 8ea02f34-05d3-41b2-9318-ab8dce7f6844
+Sample: public/samples/flat-and-crooked.jpg
+
+=== INITIAL RUN (no fromStep) — intent: "make it pop" ===
+non-transient (step,status): [(1,'applied'),(2,'applied'),(3,'applied'),(4,'applied'),(5,'applied'),(6,'done')]
+MAX APPLIED STEP: 5  (step 6 = terminal done, no new frame)
+
+ls .data/sessions/<id>/ after initial:
+  original.jpg
+  step-01.jpg step-02.jpg step-03.jpg step-04.jpg step-05.jpg
+
+=== BRANCH RUN — fromStep:2, intent: "make it dramatically darker and much more blue, like a cold midnight scene" ===
+ls BEFORE branch:
+  step-01.jpg step-02.jpg step-03.jpg step-04.jpg step-05.jpg
+
+non-transient (step,status): [(6,'applied'),(7,'applied'),(8,'applied'),(9,'done')]
+MIN/MAX STEP: (6, 9)   <-- new frames numbered AFTER prior max (5), continuing at 6
+
+ls AFTER branch:
+  step-01.jpg step-02.jpg step-03.jpg step-04.jpg step-05.jpg   <-- prior frames INTACT
+  step-06.jpg step-07.jpg step-08.jpg                            <-- branch APPENDED (step 9 = terminal done)
+
+CONCLUSION: fromStep base = step-02; new frames append at step 6+; the original
+1..5 frames are preserved (append, not overwrite). Streamed step numbers reflect
+the continued frame numbers so the client keys cards correctly.

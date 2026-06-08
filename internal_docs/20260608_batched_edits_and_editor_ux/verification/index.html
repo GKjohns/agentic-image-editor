@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Batched Edits + Editor UX — Verification</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #1a1a1a; max-width: 920px; margin: 0 auto; padding: 48px 24px 96px;
+    background: #fafafa;
+  }
+  h1 { font-size: 30px; margin: 0 0 4px; letter-spacing: -0.02em; }
+  h2 { font-size: 22px; margin: 56px 0 4px; letter-spacing: -0.01em; border-top: 1px solid #e5e5e5; padding-top: 32px; }
+  h3 { font-size: 16px; margin: 28px 0 8px; color: #333; }
+  .sub { color: #666; margin: 0 0 8px; }
+  .meta { color: #888; font-size: 14px; margin-bottom: 32px; }
+  .badge { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 99px; vertical-align: middle; margin-left: 8px; }
+  .ok { background: #dcfce7; color: #166534; }
+  .info { background: #dbeafe; color: #1e40af; }
+  figure { margin: 16px 0 24px; }
+  img { max-width: 100%; border: 1px solid #e5e5e5; border-radius: 8px; display: block; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+  figcaption { color: #555; font-size: 14px; margin-top: 8px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 680px) { .grid2 { grid-template-columns: 1fr; } }
+  pre { background: #1e1e1e; color: #e0e0e0; padding: 16px 18px; border-radius: 8px; overflow-x: auto; font-size: 13px; line-height: 1.5; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  p code { background: #eee; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+  ul { padding-left: 22px; }
+  li { margin: 4px 0; }
+  .note { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; padding: 14px 18px; margin: 20px 0; font-size: 15px; }
+  .note strong { color: #9a3412; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; margin: 12px 0; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #e5e5e5; }
+  th { color: #555; font-weight: 600; }
+  .tag { font-family: ui-monospace, monospace; font-size: 12px; background: #f0f0f0; padding: 1px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<h1>Batched Edits + Editor UX</h1>
+<p class="sub">Verification artifact for the June 8, 2026 implementation plan.</p>
+<p class="meta">Agentic Image Editor · Nuxt 4 + @nuxt/ui v4 · all three sprints <span class="badge ok">Complete</span> · typecheck + lint clean</p>
+
+<p>
+  The v1 agentic editor applied <strong>one tool per step</strong>. This push delivered four upgrades:
+  the agent now reasons in <strong>batches</strong> (a stated sub-goal + a coherent bunch of ops applied together
+  before the next re-look), the run <strong>takes over the screen</strong> with a large live preview and a tidy
+  batch timeline, any frame opens <strong>full-screen in a lightbox</strong>, and you can <strong>rewind</strong> to an
+  earlier frame and branch a new run from it (plus a one-click <em>undo last batch</em>). The LLM wire schema stayed
+  100% flat — the model emits a batch as a newline-delimited string the server parses into typed
+  <code>Operation[]</code> — sidestepping the <code>AI_JSONParseError</code> class that a typed/nested array would reintroduce.
+</p>
+
+<!-- ============================ SPRINT 1 ============================ -->
+<h2>Sprint 1 — Batched edits (data model) <span class="badge ok">Complete</span></h2>
+<p class="sub">The agent proposes a <code>goal</code> + a list of <code>operations</code> per iteration; the executor applies them as a batch; the loop streams batch events. Verified by curl before any UI work.</p>
+
+<h3>The flat schema (proven-safe shape)</h3>
+<p>The model returns a fully flat object; <code>operations</code> is one <span class="tag">tool key=val key=val</span> line per op:</p>
+<pre><code>{ assessment, done, phase: enum(straighten|exposure|tone|color|creative|finish),
+  goal: string, operations: string, reason: string }
+
+// operations example (newline-delimited):
+//   tone highlights=-45 shadows=25
+//   contrast amount=0.3
+//   vibrance amount=0.45</code></pre>
+<p>Server-side: split on newlines → parse each line via the existing tool registry → range-clamp → drop malformed/unknown/over-cap lines (capped at <code>MAX_OPS_PER_BATCH=6</code>). The client receives clean typed <code>operations: Operation[]</code> in every <code>StepEvent</code>.</p>
+
+<h3>Live curl smoke test — the batched loop in action</h3>
+<p>Intent <em>"make this flat hazy crooked photo pop"</em> on <span class="tag">flat-and-crooked.jpg</span>. The agent used 1-op batches for precision moves and a real 3-op batch for tightly-related tonal/color corrections — exactly the LEAN policy:</p>
+<pre><code>step 1  goal: "Level the horizon…"          ops: [straighten angleDeg=3.5]
+step 2  goal: "Lift the dark midtones…"     ops: [exposure ev=0.7]
+step 3  goal: "Shape the tonal range…"      ops: [tone hi=-45 sh=25, contrast 0.3, vibrance 0.45]   <- 3-op BATCH
+step 4  goal: "Reduce over-saturation…"     ops: [vibrance -0.2]   <- self-correct, back to 1-op
+
+frames written + distinct: original.jpg, step-01..04.jpg (170k/197k/237k/228k)</code></pre>
+<ul>
+  <li>Zero <code>AI_JSONParseError</code>; the newline <code>operations</code> string parsed cleanly every iteration.</li>
+  <li><code>MAX_STEPS</code> reinterpreted as max <em>re-look iterations</em> (default 30, fallback fixed <code>|| 8 → || 30</code>); new <code>MAX_OPS_PER_BATCH</code> (default 6). Headroom = up to 180 ops while still re-looking often.</li>
+  <li>Flip-flop guardrail dropped for v1 (fiddly across multi-op batches); the no-op guard + iteration cap remain.</li>
+</ul>
+<p class="sub" style="font-size:13px">Full stream sample: <code>verification/samples/sprint1_batched_stream.txt</code></p>
+
+<!-- ============================ SPRINT 2 ============================ -->
+<h2>Sprint 2 — Editing-mode layout + batch timeline <span class="badge ok">Complete</span></h2>
+<p class="sub">The run takes over the screen: input panel collapses, a large live preview shows the current frame, the timeline renders batches cleanly, and a header button reopens the input panel.</p>
+
+<h3>Setup view — input panel is the hero</h3>
+<figure>
+  <img src="screenshots/sprint2_setup_light.png" alt="Setup view">
+  <figcaption>Setup: a single centered, roomy card — dropzone + 5-sample grid + intent + Run. No empty half-screen timeline.</figcaption>
+</figure>
+
+<h3>Running / Done — collapsed input, large live preview, batch timeline</h3>
+<figure>
+  <img src="screenshots/sprint2_running_light.png" alt="Running view">
+  <figcaption>Mid-run: the input panel collapses inline, the latest <code>applied</code> frame fills a large preview (updating as batches stream), and the batch timeline runs below it.</figcaption>
+</figure>
+<figure>
+  <img src="screenshots/sprint2_done_light.png" alt="Done view">
+  <figcaption>Done: final image + Download up top, full batch timeline below. "Edit setup" / "New image" header buttons restore or reset the input panel.</figcaption>
+</figure>
+
+<h3>The batch card — goal title + op chips (the multi-op proof)</h3>
+<figure>
+  <img src="screenshots/sprint2_batch_card_chips.png" alt="Batch card with op chips">
+  <figcaption>A real 3-op batch: the <code>goal</code> is the card title; <code>operations[]</code> render as compact chips
+    (<span class="tag">tone · highlights −30 · shadows +25</span> <span class="tag">contrast · amount +0.3</span> <span class="tag">vibrance · amount +0.45</span>),
+    with assessment, reason, and a thumbnail. Migrated off the old single-op render.</figcaption>
+</figure>
+
+<h3>Dark mode + reopened panel</h3>
+<div class="grid2">
+  <figure><img src="screenshots/sprint2_running_dark.png" alt="Running dark"><figcaption>Running/done layout in dark mode.</figcaption></figure>
+  <figure><img src="screenshots/sprint2_edit_setup_reopened.png" alt="Edit setup reopened"><figcaption>"Edit setup" restores the input panel beside the timeline so you can change image/intent and re-run.</figcaption></figure>
+</div>
+<div class="grid2">
+  <figure><img src="screenshots/sprint2_setup_dark.png" alt="Setup dark"><figcaption>Setup hero in dark mode.</figcaption></figure>
+</div>
+
+<div class="note">
+  <strong>Deviation (Sprint 2):</strong> extracted <code>InputPanel.vue</code> so the image+intent form is a single source of truth rendered in both the setup hero and the collapsible panel. Also fixed a pre-existing chip-formatter bug the new chips surfaced — <code>saturation</code>/<code>sharpen</code> <code>amount</code> are unsigned (a 1-centered multiplier / a 0..1 magnitude), so they no longer get a misleading <code>+</code> prefix; true bipolar deltas keep their sign. (See the saturation deep-dive at the bottom — the executor math itself was confirmed correct.)
+</div>
+
+<!-- ============================ SPRINT 3 ============================ -->
+<h2>Sprint 3 — Image lightbox + go-back / branch <span class="badge ok">Complete</span></h2>
+<p class="sub">Click any frame to open it full-screen with Download + prev/next paging; rewind to an earlier frame and continue a new run from it; one-click "undo last batch".</p>
+
+<h3>Lightbox — full-screen frame with caption, chips, Download, prev/next</h3>
+<figure>
+  <img src="screenshots/sprint3_lightbox_light.png" alt="Lightbox light">
+  <figcaption>Opens from any timeline thumbnail and from the large preview. Shows the frame large with its <code>goal</code> caption + op chips + Download, chevron paging and ←/→ arrow keys, and a "2 / 26" position counter. Esc closes.</figcaption>
+</figure>
+<div class="grid2">
+  <figure><img src="screenshots/sprint3_lightbox_dark.png" alt="Lightbox dark"><figcaption>Lightbox in dark mode.</figcaption></figure>
+  <figure><img src="screenshots/sprint3_lightbox_prevnext.png" alt="Lightbox prev/next"><figcaption>After paging next to the following batch ("3 / 24") — prev/next works across all frames (original → each batch → final).</figcaption></figure>
+</div>
+
+<h3>Go-back / branch — backend (curl proof: append, not overwrite)</h3>
+<p><code>/api/edit</code> now accepts optional <code>fromStep</code>; a branch run starts from that frame and <strong>continues numbering after the current max step</strong> so prior frames are preserved:</p>
+<pre><code>INITIAL run (no fromStep) — "make it pop":   applied steps 1–5   → original + step-01..05
+BRANCH run  (fromStep:2) — "cold midnight":  applied steps 6–8   → step-01..05 INTACT + step-06..08 appended</code></pre>
+<p class="sub" style="font-size:13px">Full sample: <code>verification/samples/sprint3_fromstep_branch.txt</code></p>
+
+<h3>Go-back / branch — UI</h3>
+<figure>
+  <img src="screenshots/sprint3_continue_from_here_appended.png" alt="Continue from here appended">
+  <figcaption>"Continue from here" on an earlier frame + a new intent runs from that frame and <strong>appends</strong> new batches — prior cards retained, numbering continued, a "Result" badge + ring on the chosen card. (<code>stepMap</code> reset is gated on <code>branching</code>: a fresh run wipes, a continue appends.)</figcaption>
+</figure>
+<div class="grid2">
+  <figure><img src="screenshots/sprint3_use_as_result.png" alt="Use as result"><figcaption>"Use this as result" retargets the preview + Download to that frame (<code>effectiveResultStep</code> override).</figcaption></figure>
+  <figure><img src="screenshots/sprint3_undo_last_batch.png" alt="Undo last batch"><figcaption>"Undo last batch" reverts the result to the second-to-last frame in one click.</figcaption></figure>
+</div>
+
+<!-- ============================ SATURATION ============================ -->
+<h2>Follow-up — is the saturation op inverted? <span class="badge info">Investigated</span></h2>
+<p class="sub">Kyle suspected an edit run "went off the rails" because saturation was inverted (reducing it actually added it). Investigated empirically with measured pixel chroma — <strong>not inverted</strong>.</p>
+<table>
+  <tr><th>saturation <code>amount</code></th><th>mean chroma</th><th>vs input (41.48)</th><th>expected</th></tr>
+  <tr><td>0.3</td><td>13.20</td><td>−28.29</td><td>desaturate ✓</td></tr>
+  <tr><td>1.0</td><td>41.46</td><td>±0</td><td>identity ✓</td></tr>
+  <tr><td>1.7</td><td>64.79</td><td>+23.31</td><td>saturate ✓</td></tr>
+</table>
+<p>Saturation routes straight through Sharp's 1-centered <code>modulate({ saturation })</code> (<code>executor.ts</code>); vibrance (<code>pixels.ts</code> <code>newS = s + amt*(1−s)</code>) tested correct too (<code>−0.6</code> desaturates, <code>+0.6</code> saturates). The chip-formatter change is consistent with these semantics.</p>
+<div class="note">
+  <strong>Real cause of the runaway:</strong> not the pixel math — <code>vibrance</code> is disproportionately strong (<code>+0.6</code> more than doubled chroma, +51), so the agent stacking positive vibrance can run away, and its perception/decision of "too saturated" from a rendered frame is the lever. Tuning vibrance aggressiveness / the agent's saturation judgment is a follow-on, out of this plan's scope.
+</div>
+
+<h2>Summary</h2>
+<ul>
+  <li><strong>Sprint 1</strong> — batched loop + flat newline schema; <code>applyBatch</code>; reconciled <code>editing-guide.ts</code> + <code>SKILL.md</code>; config (<code>MAX_OPS_PER_BATCH</code>, reworded <code>MAX_STEPS</code>). Curl-verified.</li>
+  <li><strong>Sprint 2</strong> — <code>view</code> state (setup/running/done), collapsible <code>InputPanel.vue</code>, large live preview, batch timeline cards with op chips, docs rewritten. Playwright-verified (light + dark).</li>
+  <li><strong>Sprint 3</strong> — <code>ImageLightbox.vue</code> (paging + keys), <code>fromStep</code> append-branch backend, continue-from-here / use-as-result / undo-last-batch. Playwright + curl-verified.</li>
+  <li><strong>Gates</strong> — <code>npm run typecheck</code> and <code>npm run lint</code> clean across all three sprints.</li>
+</ul>
+
+</body>
+</html>

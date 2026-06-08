@@ -1,0 +1,44 @@
+Sprint 1 verification — batched-edit SSE stream (curl smoke test)
+Intent: "make this flat hazy crooked photo pop"  (sample: flat-and-crooked.jpg)
+Session: 8f97a065-472b-48ce-bfee-b365b88154f0
+
+Key result: the loop now reasons in BATCHES. Step 3 is a real 3-op batch
+(tone + contrast + vibrance); straighten/exposure stay 1-op (LEAN policy:
+isolate a large/uncertain move, batch tightly-related corrections). Each
+StepEvent carries a `goal` + a typed `operations[]` array. Zero
+AI_JSONParseError; the flat newline `operations` string parsed cleanly.
+
+--- step 1 (applied) ---
+goal: "Level the horizon by rotating the image clockwise ~3.5 degrees"
+operations: [ {tool:"straighten", params:{angleDeg:3.5}} ]
+phase: straighten
+
+--- step 2 (applied) ---
+goal: "Lift the dark midtones to set a proper exposure anchor"
+operations: [ {tool:"exposure", params:{ev:0.7}} ]
+phase: exposure
+
+--- step 3 (applied) — MULTI-OP BATCH ---
+goal: "Shape the tonal range: pull highlights down to reveal sky drama,
+       lift shadows slightly to open the dark city, then add contrast and
+       vibrance to make it pop"
+operations: [
+  {tool:"tone",     params:{highlights:-45, shadows:25}},
+  {tool:"contrast", params:{amount:0.3}},
+  {tool:"vibrance", params:{amount:0.45}}
+]
+phase: tone
+
+--- step 4 (applied) — self-correction, back to 1-op ---
+goal: "Drastically reduce the over-saturated colors by pulling vibrance back"
+operations: [ {tool:"vibrance", params:{amount:-0.2}} ]
+phase: color
+
+Frames written + distinct:
+  original.jpg  179148
+  step-01.jpg   170028
+  step-02.jpg   197446
+  step-03.jpg   236922
+  step-04.jpg   228382
+
+Gates: `npm run typecheck` clean, `npm run lint` clean.
