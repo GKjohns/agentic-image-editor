@@ -1,3 +1,6 @@
+import { writeFile, mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import sharp from 'sharp'
 import type { Operation } from '~~/shared/types'
 import {
@@ -280,6 +283,39 @@ export class EditExecutor {
       default: {
         throw new Error(`Unknown tool: ${tool as string}`)
       }
+    }
+  }
+
+  /**
+   * Apply a batch of operations in sequence and return the FINAL JPEG buffer.
+   *
+   * `apply` reads a path and returns an in-memory buffer, so to chain ops we
+   * stage each intermediate buffer to a temp file and feed it to the next op.
+   * We deliberately do NOT rewrite the 9 ops onto one shared raw buffer — each
+   * op already does its own raw decode/encode, and re-encoding between ops keeps
+   * this a thin loop over the existing single-op contract (correctness over the
+   * marginal JPEG round-trips, which are invisible at quality 90 over 2-6 ops).
+   *
+   * Callers guard against an empty array (an empty batch is a terminal no-op).
+   */
+  async applyBatch(inputPath: string, operations: Operation[]): Promise<Buffer> {
+    if (operations.length === 0) {
+      throw new Error('applyBatch called with an empty operations array')
+    }
+
+    const dir = await mkdtemp(join(tmpdir(), 'aie-batch-'))
+    try {
+      let path = inputPath
+      let buf: Buffer = await this.apply(path, operations[0]!)
+      for (let i = 1; i < operations.length; i++) {
+        // Stage the prior buffer to a temp file so the next op can read a path.
+        path = join(dir, `op-${i}.jpg`)
+        await writeFile(path, buf)
+        buf = await this.apply(path, operations[i]!)
+      }
+      return buf
+    } finally {
+      await rm(dir, { recursive: true, force: true })
     }
   }
 }

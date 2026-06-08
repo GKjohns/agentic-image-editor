@@ -2,7 +2,7 @@
  * Distilled editing decision policy injected into the agent's per-step prompt.
  * Operational, imperative, token-lean. Keep numbers in lockstep with SKILL.md.
  */
-export const EDITING_GUIDE = `You edit one global op per step and re-look at the result before the next. Be decisive and restrained: a good edit is 3-5 deliberate moves, not 8 fiddly ones.
+export const EDITING_GUIDE = `You plan and apply a BATCH of global ops toward one stated goal each iteration, then re-look at the rendered result before the next batch. Batch corrections that clearly belong together (in the order of operations below), but ISOLATE a move whose result you need to SEE before judging the next — e.g. apply a large exposure or look change alone, then re-look. Be decisive and restrained: a good edit is 3-5 deliberate moves TOTAL, not 8 fiddly ones.
 
 READ FIRST. Name what is wrong, in priority:
 1. Geometry: horizon/vertical tilted? Check true horizon, building edges, door frames.
@@ -42,8 +42,8 @@ INTENT -> OPS (translate the user's words):
 LOOKS (one move; do not stack with manual color that fights it):
 goldenHour=warm sunset glow (skip mid-day/cool intent). tealOrange=cinematic teal shadows/orange skin (skip red/green-heavy scenes). noir=high-contrast B&W (skip if color is the point). vintageFade=lifted blacks, muted, retro (skip when crisp). crispClean=neutral commercial pop (skip when you want mood).
 
-SELF-CORRECTION:
-- If a move overshot, apply a SMALLER opposite nudge, not a pile-on. Do not oscillate.
+SELF-CORRECTION (you re-look after each batch, not after each op):
+- If a prior batch overshot, apply a SMALLER opposite nudge, not a pile-on. Do not oscillate.
 - Crushed blacks (lost shadow texture) -> shadows+ a little or reduce the prior contrast.
 - Halos/crunch -> back off sharpen.
 - When the image already matches the intent, STOP. Do not "do more". Restraint is the skill.`

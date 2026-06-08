@@ -53,6 +53,43 @@ const decisionSchema = z.object({
 
 type DecisionObject = z.infer<typeof decisionSchema>
 
+/**
+ * Batch decision schema (Sprint 1). Stays FULLY FLAT for the same reason the
+ * single-op schema is flat — a typed/nested `operations` array makes the model
+ * fall into a non-terminating-JSON loop through the Gateway (`AI_JSONParseError`).
+ * So the batch travels as a newline-delimited STRING, one op per line, and the
+ * server splits + parses + clamps it into `Operation[]`. See `parseBatch`.
+ */
+const batchSchema = z.object({
+  assessment: z.string().describe('What you see in the current image versus the intent. One or two sentences.'),
+  done: z.boolean().describe('True when the goal is met. When true, leave operations empty.'),
+  phase: z.enum(['straighten', 'exposure', 'tone', 'color', 'creative', 'finish'])
+    .describe('Which phase this batch belongs to.'),
+  goal: z.string().describe('One sentence stating what THIS batch of ops is trying to accomplish (e.g. "neutralize the cool cast and set the midtone exposure").'),
+  operations: z.string().describe(
+    [
+      'The batch of operations to apply this iteration, as a NEWLINE-DELIMITED string,',
+      'ONE op per line, in the order they should be applied. Empty string when done.',
+      'Each line is: `tool key=val key=val` (space-separated, no commas, no quotes).',
+      'Use ONLY these tools and param keys (out-of-range values are clamped server-side):',
+      '  straighten angleDeg=<-45..45>',
+      '  exposure ev=<-3..3>',
+      '  contrast amount=<-1..1>',
+      '  tone highlights=<-100..100> shadows=<-100..100>',
+      '  whiteBalance temp=<-100..100> tint=<-100..100>',
+      '  saturation amount=<0..2>',
+      '  vibrance amount=<-1..1>',
+      '  look name=<goldenHour|tealOrange|noir|vintageFade|crispClean>',
+      '  sharpen amount=<0..1>',
+      'Example (three ops):',
+      '  whiteBalance temp=-40 tint=0',
+      '  exposure ev=0.3',
+      '  contrast amount=0.25'
+    ].join('\n')
+  ),
+  reason: z.string().describe('Why this batch is the right next move (or why the goal is met). One sentence.')
+})
+
 /** A compact record of a prior step, fed back so the model sees its own history. */
 export interface HistoryEntry {
   tool: string
@@ -110,6 +147,76 @@ function toOperation(o: DecisionObject): Operation {
       // Should be unreachable: 'none' is handled by the caller before this runs.
       return { tool: 'exposure', params: { ev: 0 } }
   }
+}
+
+/** Tools the line-parser accepts (excludes the single-op sentinel 'none'). */
+const BATCH_TOOLS = new Set<ToolName>([
+  'straighten', 'exposure', 'contrast', 'tone',
+  'whiteBalance', 'saturation', 'vibrance', 'look', 'sharpen'
+])
+const LOOK_NAMES = new Set(['goldenHour', 'tealOrange', 'noir', 'vintageFade', 'crispClean'])
+
+/**
+ * Parse ONE `tool key=val key=val` line into a clamped Operation, or null if the
+ * line is malformed / names an unknown tool / (for look) names an unknown grade.
+ * Reuses the same per-tool clamp ranges as the single-op reassembly above.
+ */
+function parseOpLine(line: string): Operation | null {
+  const tokens = line.trim().split(/\s+/).filter(Boolean)
+  if (tokens.length === 0) return null
+
+  const tool = tokens[0] as ToolName
+  if (!BATCH_TOOLS.has(tool)) return null
+
+  const kv: Record<string, string> = {}
+  for (const tok of tokens.slice(1)) {
+    const eq = tok.indexOf('=')
+    if (eq <= 0 || eq === tok.length - 1) continue // skip tokens without a non-empty key=value shape
+    kv[tok.slice(0, eq)] = tok.slice(eq + 1)
+  }
+
+  const num = (k: string) => Number(kv[k])
+
+  switch (tool) {
+    case 'straighten':
+      return { tool, params: { angleDeg: clamp(num('angleDeg') || 0, -45, 45) } }
+    case 'exposure':
+      return { tool, params: { ev: clamp(num('ev') || 0, -3, 3) } }
+    case 'contrast':
+      return { tool, params: { amount: clamp(num('amount') || 0, -1, 1) } }
+    case 'tone':
+      return { tool, params: { highlights: clamp(num('highlights') || 0, -100, 100), shadows: clamp(num('shadows') || 0, -100, 100) } }
+    case 'whiteBalance':
+      return { tool, params: { temp: clamp(num('temp') || 0, -100, 100), tint: clamp(num('tint') || 0, -100, 100) } }
+    case 'saturation':
+      return { tool, params: { amount: clamp(Number.isFinite(num('amount')) ? num('amount') : 1, 0, 2) } }
+    case 'vibrance':
+      return { tool, params: { amount: clamp(num('amount') || 0, -1, 1) } }
+    case 'look': {
+      const name = kv.name ?? ''
+      if (!LOOK_NAMES.has(name)) return null
+      return { tool, params: { name } }
+    }
+    case 'sharpen':
+      return { tool, params: { amount: clamp(num('amount') || 0, 0, 1) } }
+    default:
+      return null
+  }
+}
+
+/**
+ * Split the model's newline-delimited `operations` string into clamped
+ * `Operation[]`: drop blank/malformed/unknown lines, then hard-cap at
+ * `maxOps` (over-cap lines are dropped). An empty/all-dropped batch returns [].
+ */
+function parseBatch(operations: string, maxOps: number): Operation[] {
+  const ops: Operation[] = []
+  for (const line of operations.split('\n')) {
+    if (ops.length >= maxOps) break
+    const op = parseOpLine(line)
+    if (op) ops.push(op)
+  }
+  return ops
 }
 
 /**
@@ -180,6 +287,8 @@ export async function decideNextEdit(
       assessment: object.assessment,
       done: true,
       phase: object.phase,
+      goal: object.reason,
+      operations: [],
       reason: object.reason
     }
   }
@@ -188,7 +297,97 @@ export async function decideNextEdit(
     assessment: object.assessment,
     done: false,
     phase: object.phase,
-    operation: toOperation(object),
+    goal: object.reason,
+    operations: [toOperation(object)],
+    reason: object.reason
+  }
+}
+
+/**
+ * One vision-in-the-loop BATCH decision (Sprint 1). The model looks at the
+ * CURRENT rendered image (ORIGINAL as reference), states a single `goal`, and
+ * proposes a coherent BATCH of ops (as a newline-delimited string) to apply
+ * together before the next re-look. The server splits + clamps + caps that
+ * string into `Operation[]`.
+ *
+ * `maxOps` is the per-batch hard cap (passed in from the loop / runtime config).
+ */
+export async function decideNextBatch(
+  args: DecideArgs,
+  model: string,
+  maxOps: number
+): Promise<Decision> {
+  const { originalPath, currentPath, intent, history, phasePrior } = args
+
+  const [originalBuf, currentBuf] = await Promise.all([
+    readFile(originalPath),
+    readFile(currentPath)
+  ])
+
+  const promptText = [
+    'You are an expert photo-editing agent. You work in BATCHES: each iteration you state ONE goal and apply a coherent bunch of operations toward it, THEN the loop re-renders and you look again.',
+    '',
+    `USER INTENT: ${intent}`,
+    '',
+    'EXPERT EDITING POLICY (follow this — it is how a pro would approach the edit):',
+    EDITING_GUIDE,
+    '',
+    'AVAILABLE TOOLS (the live registry — every op in your batch must be one of these):',
+    describeTools(),
+    '',
+    'OPERATIONS APPLIED SO FAR:',
+    historyText(history),
+    '',
+    `SOFT PHASE ORDER (a bias, not a rule): ${phasePrior.join(' -> ')}.`,
+    'Move roughly in this order but deviate when the image needs it.',
+    '',
+    'INSTRUCTIONS:',
+    '- Look at the CURRENT image (first image). The ORIGINAL is provided as reference (second image).',
+    '- Assess the current image against the intent, naming the top problem (geometry, exposure, clipping, color cast, flatness).',
+    '- State a single `goal` for this batch, then list the operations that achieve it, IN the disciplined order of operations.',
+    `- LEAN BATCHING: plan 2-4 clearly-RELATED corrections that you are confident move together toward the goal (max ${maxOps}). But DROP TO 1 op when you just made — or are about to make — a large or uncertain move (e.g. a big exposure or look change): apply it alone so you can SEE the result before deciding what is next.`,
+    '- Respect the policy\'s restraint and target magnitudes. A finished edit is usually 3-5 ops TOTAL across all batches, not per batch.',
+    '- Emit `operations` as a newline-delimited string, one `tool key=val key=val` line per op, in apply order (see the field description for the exact grammar and valid tools/params).',
+    '- When the intent is already satisfied (or further edits would not help), set done:true and leave operations empty.'
+  ].join('\n')
+
+  const { object } = await generateObject({
+    model,
+    schema: batchSchema,
+    maxOutputTokens: 2048,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: promptText },
+          { type: 'image', image: currentBuf },
+          { type: 'image', image: originalBuf }
+        ]
+      }
+    ]
+  })
+
+  const operations = parseBatch(object.operations, maxOps)
+
+  // Terminal: model says done, OR the batch parsed to nothing usable (treated as
+  // a safe stop). The loop's no-op guard handles all-identity batches downstream.
+  if (object.done || operations.length === 0) {
+    return {
+      assessment: object.assessment,
+      done: true,
+      phase: object.phase,
+      goal: object.goal,
+      operations: [],
+      reason: object.reason
+    }
+  }
+
+  return {
+    assessment: object.assessment,
+    done: false,
+    phase: object.phase,
+    goal: object.goal,
+    operations,
     reason: object.reason
   }
 }

@@ -33,17 +33,24 @@ export interface Operation {
   params: Record<string, number | string>
 }
 
-/** Structured output of one decision call (vision + structured in one shot). */
+/**
+ * Structured output of one decision call (vision + structured in one shot).
+ * As of Sprint 1 the agent reasons in BATCHES: it states a `goal` and proposes a
+ * list of `operations` to apply together before the next re-look. `operations`
+ * is empty when `done` (the goal is met → terminal stop).
+ */
 export interface Decision {
   /** What the model sees in the current image vs. the intent. */
   assessment: string
-  /** True when the goal is met — loop stops, no operation applied. */
+  /** True when the goal is met — loop stops, no operations applied. */
   done: boolean
-  /** Which phase this step belongs to. */
+  /** Which phase this batch belongs to. */
   phase: Phase
-  /** The op to apply this step. Omitted when done. */
-  operation?: Operation
-  /** Why this op is the right next move. */
+  /** One-line statement of what this batch of ops is trying to accomplish. */
+  goal: string
+  /** The ops to apply this iteration, in order. Empty when done. */
+  operations: Operation[]
+  /** Why this batch is the right next move. */
   reason: string
 }
 
@@ -62,6 +69,14 @@ export interface StepEvent {
   assessment?: string
   reason?: string
   phase?: Phase
+  /** One-line goal the batch is working toward (Sprint 1 batching). */
+  goal?: string
+  /** The batch of ops decided/applied this iteration (Sprint 1 batching). */
+  operations?: Operation[]
+  /**
+   * Single-op field kept for backward compat with TimelineStep.vue. The server
+   * no longer populates it; new clients should read `operations`.
+   */
   operation?: Operation
   /** URL of the rendered result for this step (present on `applied`). */
   imageUrl?: string

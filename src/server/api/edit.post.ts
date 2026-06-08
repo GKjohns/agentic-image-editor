@@ -2,11 +2,18 @@ import { createUIMessageStream, createUIMessageStreamResponse } from 'ai'
 import type { Operation, Phase, StepEvent } from '~~/shared/types'
 import { storage } from '~~/server/utils/storage'
 import { executor } from '~~/server/utils/executor'
-import { decideNextEdit, type HistoryEntry } from '~~/server/utils/agent'
+import { decideNextBatch, type HistoryEntry } from '~~/server/utils/agent'
 
 interface EditRequestBody {
   id?: string
   intent?: string
+  /**
+   * Branch point: the frame to continue editing FROM. `'original'` or a step
+   * number. When present, the loop's base image is that frame and new frames are
+   * numbered AFTER the current max step (append, never overwrite prior frames).
+   * Absent → unchanged default: base = `original`, numbering starts at step 1.
+   */
+  fromStep?: number | 'original'
 }
 
 /** Soft prior the planner is biased to move through (not enforced). */
@@ -35,40 +42,14 @@ function isNoOp(op: Operation): boolean {
   }
 }
 
-/**
- * Reversal: the new op pushes the immediately-previous APPLIED op back the other
- * way. Same tool, and either a re-toggled look (same grade) or opposite-sign
- * numeric params of similar magnitude (e.g. whiteBalance temp -35 then +30).
- *
- * NOTE a *single* reversal is healthy convergence — the model overshot and is
- * dialing back, and the reversing op yields the BETTER frame. We let it apply.
- * Only a *repeated* reversal on the same tool (A+ → A- → A+ …) is true
- * flip-flopping that won't settle; that's what the loop stops on. Shrinking
- * repeats (same tool, smaller each time) are fine-tuning, not a problem.
- */
-function reversesPrevious(prev: Operation, next: Operation): boolean {
-  if (prev.tool !== next.tool) return false
-  if (next.tool === 'look') {
-    // Re-applying the same look is a wash; a different look is a new direction.
-    return String(prev.params.name) === String(next.params.name)
-  }
-  // Numeric tools: every shared key flips sign with comparable magnitude.
-  const keys = Object.keys(next.params)
-  let sawSignedKey = false
-  for (const k of keys) {
-    const a = Number(prev.params[k]) || 0
-    const b = Number(next.params[k]) || 0
-    if (Math.abs(a) < 1e-3 && Math.abs(b) < 1e-3) continue // both ~0: neutral key
-    sawSignedKey = true
-    if (a * b >= 0) return false // same sign (or one zero) → not a reversal
-    const mag = Math.min(Math.abs(a), Math.abs(b)) / Math.max(Math.abs(a), Math.abs(b))
-    if (mag < 0.4) return false // magnitudes too different to call it an undo
-  }
-  return sawSignedKey
-}
+// NOTE (Sprint 1): the cross-batch flip-flop / reversal guardrail was REMOVED for
+// the batching model. With multi-op batches, a same-tool sign flip across batches
+// is often legitimate convergence and is hard to judge cheaply. For v1 we rely on
+// the model's own done-judgment plus the MAX_STEPS iteration cap to halt, and keep
+// only the no-op guard below (an empty / all-identity batch ends the run).
 
 export default defineEventHandler(async (event) => {
-  const { id, intent } = await readBody<EditRequestBody>(event)
+  const { id, intent, fromStep } = await readBody<EditRequestBody>(event)
   if (!id || typeof id !== 'string') {
     throw createError({ statusCode: 400, statusMessage: 'id is required' })
   }
@@ -83,9 +64,40 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, statusMessage: 'Session not found' })
   }
 
+  // --- Branch point (Sprint 3) -------------------------------------------------
+  // `fromStep` lets a "continue from here" run start from a prior frame. Default
+  // (absent) keeps current behavior exactly: base = original, numbering from 1.
+  let baseStep: 'original' | number = 'original'
+  if (fromStep !== undefined && fromStep !== null) {
+    if (fromStep === 'original') {
+      baseStep = 'original'
+    } else {
+      const n = Number(fromStep)
+      if (!Number.isInteger(n) || n < 1) {
+        throw createError({ statusCode: 400, statusMessage: `Invalid fromStep: ${fromStep}` })
+      }
+      baseStep = n
+    }
+    // The chosen base frame must exist.
+    try {
+      await storage.read(id, baseStep)
+    } catch {
+      throw createError({ statusCode: 404, statusMessage: `Frame not found: ${baseStep}` })
+    }
+  }
+
+  // New frames continue numbering AFTER the current max step so a branch appends
+  // rather than overwrites. For a default fresh run (no prior steps) this is 0 →
+  // numbering starts at 1, identical to before.
+  const existingSteps = await storage.listSteps(id)
+  const startOffset = existingSteps.length ? Math.max(...existingSteps) : 0
+
   const runtimeConfig = useRuntimeConfig(event)
   const model = runtimeConfig.agentModel
-  const MAX_STEPS = parseInt(runtimeConfig.maxSteps) || 8
+  // MAX_STEPS = max re-look iterations (each iteration applies a batch of ops).
+  const MAX_STEPS = parseInt(runtimeConfig.maxSteps) || 30
+  // Per-batch hard cap on operations (over-cap lines are dropped server-side).
+  const MAX_OPS_PER_BATCH = parseInt(runtimeConfig.maxOpsPerBatch) || 6
 
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
@@ -101,17 +113,20 @@ export default defineEventHandler(async (event) => {
         })
       }
 
-      let currentPath = storage.pathFor(id, 'original')
+      let currentPath = storage.pathFor(id, baseStep)
       const history: HistoryEntry[] = []
-      const appliedOps: Operation[] = [] // for reversal detection
-      let consecutiveReversals = 0 // same-tool flip-flop counter
-      let lastStep = 0
-      let lastAppliedStep = 0 // step number whose frame is the current result
+      let lastStep = startOffset // last frame number we emitted
+      // The result frame to fall back to. When branching, the base frame itself is
+      // a valid prior result; when starting fresh from original it's 0 (none yet).
+      let lastAppliedStep = baseStep === 'original' ? 0 : baseStep
 
-      for (let step = 1; step <= MAX_STEPS; step++) {
+      // `iter` is the re-look iteration (1..MAX_STEPS); `step` is the actual frame
+      // number, continued after any existing frames so branches append.
+      for (let iter = 1; iter <= MAX_STEPS; iter++) {
+        const step = startOffset + iter
         lastStep = step
         try {
-          const decision = await decideNextEdit(
+          const decision = await decideNextBatch(
             {
               originalPath: storage.pathFor(id, 'original'),
               currentPath,
@@ -119,25 +134,28 @@ export default defineEventHandler(async (event) => {
               history,
               phasePrior: PHASE_ORDER
             },
-            model
+            model,
+            MAX_OPS_PER_BATCH
           )
 
-          // Ephemeral "deciding" card update.
+          // Ephemeral "deciding" card update (batch-shaped).
           emit({
             step,
             status: 'deciding',
             assessment: decision.assessment,
-            operation: decision.operation,
+            goal: decision.goal,
+            operations: decision.operations,
             reason: decision.reason,
             phase: decision.phase
           }, true)
 
-          // Model stopped (done, or tool=none → safe stop).
-          if (decision.done || !decision.operation) {
+          // Model stopped (done, or an empty parsed batch → safe stop).
+          if (decision.done || decision.operations.length === 0) {
             emit({
               step,
               status: 'done',
               assessment: decision.assessment,
+              goal: decision.goal,
               reason: decision.reason,
               phase: decision.phase,
               imageUrl: lastAppliedStep > 0
@@ -147,44 +165,29 @@ export default defineEventHandler(async (event) => {
             return
           }
 
-          const op = decision.operation
-
-          // --- Guardrail: no-op. The model effectively chose nothing. Stop.
-          if (isNoOp(op)) {
+          // --- Guardrail: no-op batch. Every op in the batch is effectively
+          // identity → applying it would burn an iteration for nothing. Stop,
+          // keeping the last applied frame.
+          const effectiveOps = decision.operations.filter(op => !isNoOp(op))
+          if (effectiveOps.length === 0) {
             emit({
               step,
               status: 'done',
               assessment: decision.assessment,
-              reason: `${decision.reason} (chosen op had no effect — stopping)`,
-              phase: decision.phase
+              goal: decision.goal,
+              reason: `${decision.reason} (chosen batch had no effect — stopping)`,
+              phase: decision.phase,
+              imageUrl: lastAppliedStep > 0
+                ? `/api/image/${id}/${lastAppliedStep}?t=${Date.now()}`
+                : undefined
             })
             return
           }
 
-          // --- Guardrail: flip-flop oscillation. A single reversal is healthy
-          // (the model overshot and is correcting — that op makes a better
-          // frame, so let it apply). But a SECOND consecutive reversal on the
-          // same tool means it's flip-flopping and won't settle: stop, keeping
-          // the last applied (most-converged) frame. The MAX_STEPS cap is the
-          // ultimate backstop for any slower wobble.
-          const prev = appliedOps[appliedOps.length - 1]
-          const isReversal = !!prev && reversesPrevious(prev, op)
-          if (isReversal && consecutiveReversals >= 1) {
-            emit({
-              step,
-              status: 'done',
-              assessment: decision.assessment,
-              reason: 'The agent is flip-flopping the same control back and forth — stopping at the last settled frame.',
-              phase: decision.phase
-            })
-            return
-          }
-
-          const buf = await executor.apply(currentPath, op)
+          const buf = await executor.applyBatch(currentPath, effectiveOps)
           await storage.writeStep(id, step, buf)
           currentPath = storage.pathFor(id, step)
           lastAppliedStep = step
-          consecutiveReversals = isReversal ? consecutiveReversals + 1 : 0
 
           emit({
             step,
@@ -193,13 +196,15 @@ export default defineEventHandler(async (event) => {
             // stale-render edge cases if a step number is ever reused.
             imageUrl: `/api/image/${id}/${step}?t=${Date.now()}`,
             assessment: decision.assessment,
-            operation: op,
+            goal: decision.goal,
+            operations: effectiveOps,
             reason: decision.reason,
             phase: decision.phase
           })
 
-          history.push({ tool: op.tool, params: op.params })
-          appliedOps.push(op)
+          for (const op of effectiveOps) {
+            history.push({ tool: op.tool, params: op.params })
+          }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           emit({
@@ -216,8 +221,11 @@ export default defineEventHandler(async (event) => {
       emit({
         step: lastStep + 1,
         status: 'done',
-        assessment: `Reached the ${MAX_STEPS}-step limit with ${appliedOps.length} edits applied.`,
-        reason: 'Stopping at the step cap; the last applied frame is the final result.'
+        assessment: `Reached the ${MAX_STEPS}-iteration limit with ${history.length} edits applied.`,
+        reason: 'Stopping at the iteration cap; the last applied frame is the final result.',
+        imageUrl: lastAppliedStep > 0
+          ? `/api/image/${id}/${lastAppliedStep}?t=${Date.now()}`
+          : undefined
       })
     }
   })
