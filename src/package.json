@@ -4,21 +4,26 @@
   "type": "module",
   "scripts": {
     "build": "nuxt build",
-    "dev": "nuxt dev",
+    "dev": "TMPDIR=/tmp nuxt dev",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare",
     "lint": "eslint .",
     "typecheck": "nuxt typecheck"
   },
   "dependencies": {
+    "@ai-sdk/vue": "^3.0.197",
     "@iconify-json/lucide": "^1.2.111",
     "@iconify-json/simple-icons": "^1.2.84",
     "@nuxt/ui": "^4.8.1",
+    "ai": "^6.0.197",
     "nuxt": "^4.4.6",
-    "tailwindcss": "^4.3.0"
+    "sharp": "^0.34.5",
+    "tailwindcss": "^4.3.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@nuxt/eslint": "^1.15.2",
+    "@types/node": "^25.9.2",
     "eslint": "^10.4.1",
     "typescript": "^6.0.3",
     "vue-tsc": "^3.3.3"
