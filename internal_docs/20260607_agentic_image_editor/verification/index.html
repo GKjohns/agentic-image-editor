@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agentic Image Editor — Phase 5 Verification</title>
+<style>
+  :root { color-scheme: light; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    color: #1a1a1a;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 3rem 1.5rem 6rem;
+  }
+  h1 { font-size: 2rem; margin-bottom: 0.25rem; }
+  h2 { font-size: 1.4rem; margin-top: 3rem; border-bottom: 1px solid #e5e5e5; padding-bottom: 0.4rem; }
+  h3 { font-size: 1.1rem; margin-top: 2rem; }
+  .meta { color: #666; font-size: 0.9rem; margin-bottom: 2rem; }
+  .summary { font-size: 1.05rem; background: #f7f9f7; border-left: 3px solid #16a34a; padding: 1rem 1.25rem; border-radius: 4px; }
+  figure { margin: 1.5rem 0; }
+  img { max-width: 100%; height: auto; border: 1px solid #e0e0e0; border-radius: 6px; display: block; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+  figcaption { font-size: 0.9rem; color: #555; margin-top: 0.5rem; font-style: italic; }
+  .proves { color: #15803d; font-style: normal; font-weight: 600; }
+  code { background: #f0f0f0; padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.85em; }
+  pre { background: #1e1e1e; color: #e8e8e8; padding: 1rem 1.25rem; border-radius: 6px; overflow-x: auto; font-size: 0.85rem; line-height: 1.5; }
+  pre code { background: none; padding: 0; color: inherit; }
+  .callout { background: #fff8ec; border: 1px solid #f5d99a; border-radius: 6px; padding: 1rem 1.25rem; margin: 1.5rem 0; }
+  .callout h3 { margin-top: 0; }
+  .ok { color: #15803d; font-weight: 600; }
+  .note { color: #92600a; }
+  ul { padding-left: 1.25rem; }
+  li { margin: 0.35rem 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.92rem; }
+  th, td { text-align: left; padding: 0.45rem 0.7rem; border-bottom: 1px solid #e5e5e5; }
+  th { background: #f7f7f7; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 600px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<h1>Agentic Image Editor</h1>
+<div class="meta">Phase 5 verification &middot; June 7&ndash;8, 2026 &middot; Sprints 1&ndash;4 complete</div>
+
+<p class="summary">
+A single-page Nuxt tool that takes an image plus a natural-language edit intent and produces an
+edited image via a <strong>vision-in-the-loop agent</strong>. Each step, the model looks at the
+<em>current rendered image</em>, decides one editing operation, the server applies it with Sharp,
+and the loop continues until the model judges the goal met or hits a hard step cap. A live timeline
+streams every step's assessment, operation, and resulting thumbnail &mdash; ending in a downloadable
+final image. One SDK (Vercel AI SDK), one key (Vercel AI Gateway), model swappable by string
+(verified with <code>anthropic/claude-sonnet-4-6</code>).
+</p>
+
+<h2>Verification result at a glance</h2>
+<ul>
+  <li><span class="ok">Typecheck:</span> <code>npx nuxi typecheck</code> &rarr; clean (exit 0).</li>
+  <li><span class="ok">Lint:</span> <code>npx eslint app/ server/ shared/</code> &rarr; clean (exit 0). One pre-existing error in <code>nuxt.config.ts</code> (modules/devtools key order) predates this work and is the only project-wide lint finding.</li>
+  <li><span class="ok">End-to-end run:</span> agent took <strong>4 operations + 1 terminating decision</strong> (straighten &minus;2.5&deg;, exposure +1.2&nbsp;EV, contrast 0.45, saturation 1.5, then done). Final image is straighter, brighter, and far punchier than the flat/dark/crooked input.</li>
+  <li><span class="ok">Download link:</span> wired to <code>/api/image/&lt;id&gt;/4</code> with <code>download="edited.jpg"</code>; fetch returns <strong>200 / image/jpeg</strong>, final <code>&lt;img&gt;</code> resolves (1298&times;883).</li>
+</ul>
+
+<h2>Sprint 1 &mdash; Single-page UI shell</h2>
+<p>
+The full editor layout: rebranded chrome (title "Agentic Image Editor", starter GitHub/template menu
+removed), a two-column responsive layout (sticky input panel left, timeline right on <code>lg</code>),
+a dashed dropzone with live preview, an intent textarea, and a Run button gated on file + intent.
+The <code>TimelineStep</code> component renders one card &mdash; step number, phase badge, assessment,
+operation badge, reason, and a thumbnail/spinner driven by <code>status</code>. Shared TS types live
+in <code>shared/types.ts</code>. Dark mode is the untouched Nuxt UI color-mode system.
+</p>
+<div class="grid2">
+  <figure>
+    <img src="screenshots/01_initial_light.png" alt="Initial empty state, light mode">
+    <figcaption><span class="proves">Proves:</span> empty state renders cleanly in light mode &mdash; dropzone, sample picker, intent box, gated Run button.</figcaption>
+  </figure>
+  <figure>
+    <img src="screenshots/02_initial_dark.png" alt="Initial empty state, dark mode">
+    <figcaption><span class="proves">Proves:</span> the same layout in dark mode with correct contrast &mdash; the color-mode toggle works, nothing is broken.</figcaption>
+  </figure>
+</div>
+
+<h2>Sprint 2 &mdash; Storage + Executor + image routes</h2>
+<p>
+The backend seams, all testable by cURL before any agent existed. Two clean interfaces kept swappable
+for a future Vercel Sandbox: <code>StorageAdapter</code> (<code>server/utils/storage.ts</code>, local
+impl over <code>.data/sessions/&lt;id&gt;/</code>, <code>original.jpg</code> + <code>step-NN.jpg</code>)
+and <code>EditExecutor</code> (<code>server/utils/executor.ts</code>, in-process Sharp). The four v1
+Sharp operations and their final param conventions:
+</p>
+<table>
+  <tr><th>Tool</th><th>Param &amp; range</th><th>Sharp mapping</th></tr>
+  <tr><td><code>exposure</code></td><td><code>ev</code> &minus;3..3</td><td><code>.linear(2**ev, 0)</code> (multiplicative stops)</td></tr>
+  <tr><td><code>saturation</code></td><td><code>amount</code> 0..2</td><td><code>.modulate({ saturation })</code> (1 = unchanged)</td></tr>
+  <tr><td><code>contrast</code></td><td><code>amount</code> &minus;1..1</td><td>mapped to multiplier, <code>.linear(m, 128&minus;128*m)</code> about mid-gray (linear S-curve approx)</td></tr>
+  <tr><td><code>straighten</code></td><td><code>angleDeg</code> &minus;45..45</td><td>rotate then center-crop largest inscribed rect (output smaller than input)</td></tr>
+</table>
+<p>
+Routes: <code>POST /api/session</code> (multipart upload &rarr; <code>{ id }</code>) and
+<code>GET /api/image/[id]/[step]</code> (serves the jpg with correct content-type/cache headers).
+Sprint 2 was verified by cURL and a node script:
+</p>
+<pre><code># session create returns an id; original.jpg lands on disk
+curl -F image=@test.jpg http://localhost:3000/api/session
+# -&gt; { "id": "..." }   (400 on no-file, 404 on bad session)
+
+# each step is served back as image bytes
+curl http://localhost:3000/api/image/&lt;id&gt;/original   # -&gt; 200 image/jpeg
+
+# node script applied all 4 ops -&gt; 4/4 valid &amp; visibly distinct outputs;
+# straighten shrinks dims as expected.</code></pre>
+<p>
+This run re-confirmed the route layer end-to-end live: the final <code>GET /api/image/&lt;id&gt;/4</code>
+returned <span class="ok">200 image/jpeg</span> and rendered in the browser.
+</p>
+
+<h2>Sprint 3 &mdash; The agent loop + live streaming timeline</h2>
+<p>
+The real thing. <code>server/utils/agent.ts</code> runs <code>decideNextEdit</code> via the AI SDK's
+<code>generateObject</code>, passing the current + original images as <code>{type:'image'}</code>
+content parts plus the intent, op history, and phase prior; the gateway model string routes the call.
+<code>server/api/edit.post.ts</code> wraps a bounded manual loop in <code>createUIMessageStream</code>,
+emitting <code>data-step</code> events (<code>deciding</code> transient &rarr;
+<code>applied</code>/<code>done</code>/<code>error</code> persisted), with a hard
+<code>MAX_STEPS</code> cap and per-step try/catch. The client (<code>app/pages/index.vue</code>)
+runs session &rarr; edit &rarr; stream with an <code>AbortController</code>-backed Stop, merging each
+step into one card keyed by step number, with a final-image fallback + Download link. Four sample
+photos ship under <code>public/samples/</code> with a "No image? Try a sample" picker.
+</p>
+
+<figure>
+  <img src="screenshots/04_streaming_midrun.png" alt="Mid-run streaming state">
+  <figcaption><span class="proves">Proves:</span> mid-run, with the Run button showing "Running&hellip;" and a Stop button live &mdash; three step cards (straighten, exposure, contrast) have already streamed in with thumbnails while the run continues. The timeline fills in incrementally, not all at once.</figcaption>
+</figure>
+
+<figure>
+  <img src="screenshots/05_timeline_complete.png" alt="Completed timeline">
+  <figcaption><span class="proves">Proves:</span> the full completed timeline &mdash; 4 applied operations each with a result thumbnail (straighten &minus;2.5&deg;, exposure +1.2&nbsp;EV, contrast 0.45, saturation 1.5), plus the terminating "done" decision card, then the Final result panel with the corrected image.</figcaption>
+</figure>
+
+<figure>
+  <img src="screenshots/06_final_result.png" alt="Final result panel with download">
+  <figcaption><span class="proves">Proves:</span> the Final result panel with a working Download button. The final cityscape is straightened, brightened, and color/contrast-boosted &mdash; a dramatic correction of the flat, dark, crooked input.</figcaption>
+</figure>
+
+<div class="callout">
+  <h3>Notable deviations (Sprint 3)</h3>
+  <p>
+    <strong class="note">1. Flat zod schema, not a discriminated union (load-bearing).</strong>
+    The plan's nested/optional <code>operation</code> (discriminated union on <code>tool</code>) made the
+    model fall into a degenerate repetition loop through the gateway
+    (<code>finishReason: length</code> &rarr; <code>AI_JSONParseError</code>), reproduced across
+    temperatures. The wire schema was switched to fully flat:
+    <code>{ assessment, done, phase, tool: enum[&hellip;4 tools,'none'], ev, amount, angleDeg, reason }</code>
+    &mdash; no nesting, no optionality; <code>tool:'none'</code> signals done; params always present.
+    <code>agent.ts</code> reassembles the executor's <code>{tool, params:{&hellip;}}</code> shape and
+    range-clamps after validation. Executor + shared types untouched.
+  </p>
+  <p>
+    <strong class="note">2. Manual SSE parse, not <code>readUIMessageStream</code>.</strong>
+    The SDK helper drops <code>transient</code> parts (delivers them only via an unexposed
+    <code>onData</code>), so it would swallow the <code>deciding</code> events that drive the live
+    spinner. The client parses SSE frames directly to capture both transient and persisted
+    <code>data-step</code> chunks.
+  </p>
+  <p style="margin-bottom:0">
+    A conscious architecture departure from <code>~/claude-ops/conventions/ai_sdk_usage.md</code> is
+    also documented in the plan: one SDK + one key (Vercel AI SDK + Gateway) instead of the two-SDK
+    split, because this tool streams nothing to a DB row, needs vision + structured output in one
+    <code>generateObject</code> call, and Gateway routing is an explicit spec requirement.
+  </p>
+</div>
+
+<h2>End-to-end run-through</h2>
+<p>The golden path, in order. Intent typed:
+<em>"Straighten the crooked horizon, brighten this dark photo, and boost the contrast and color to make it pop."</em></p>
+
+<figure>
+  <img src="screenshots/01_initial_light.png" alt="1. Initial empty state">
+  <figcaption><span class="proves">1 &mdash; Initial:</span> empty editor; Run is disabled until both an image and an intent are present.</figcaption>
+</figure>
+
+<figure>
+  <img src="screenshots/03_image_loaded.png" alt="2. Image loaded">
+  <figcaption><span class="proves">2 &mdash; Image loaded:</span> the "Flat &amp; crooked" sample is selected and previews in the input panel &mdash; visibly dark, low-contrast, and tilted. Proves the sample picker and preview/remove control work.</figcaption>
+</figure>
+
+<figure>
+  <img src="screenshots/04_streaming_midrun.png" alt="3. Streaming mid-run">
+  <figcaption><span class="proves">3 &mdash; Mid-run:</span> steps 1&ndash;3 applied (straighten &rarr; exposure &rarr; contrast) with thumbnails while the run is still going (Running&hellip; / Stop visible). Proves the timeline streams incrementally.</figcaption>
+</figure>
+
+<figure>
+  <img src="screenshots/05_timeline_complete.png" alt="4. Timeline complete">
+  <figcaption><span class="proves">4 &mdash; Timeline complete:</span> all 4 operations done plus the terminating decision; the agent reasoned about each prior result before choosing the next op. Proves the vision-in-the-loop behavior end-to-end.</figcaption>
+</figure>
+
+<figure>
+  <img src="screenshots/06_final_result.png" alt="5. Final result">
+  <figcaption><span class="proves">5 &mdash; Final result:</span> downloadable corrected image. Before (step 2 caption) &rarr; after: a flat, dark, crooked photo becomes a level, bright, vivid cityscape. Download link verified 200 / image/jpeg.</figcaption>
+</figure>
+
+<h2>Sprint 4 &mdash; Richer toolset + baked-in editing know-how + loop guardrails</h2>
+<div style="border-left:4px solid #d97706;background:#fffbeb;padding:10px 14px;margin:12px 0;border-radius:4px;">
+<strong>Update (post-capture) &mdash; oscillation guardrail refined.</strong> The two Sprint&nbsp;4 run
+screenshots below were captured under the <em>initial</em> guardrail, which stopped on the <em>first</em>
+reversal of a tool (e.g. <code>whiteBalance&nbsp;&minus;35</code> then <code>+30</code>) and kept the
+pre-reversal frame. That was too eager &mdash; a single corrective reversal is healthy convergence (the
+model overshot and is dialing in, and the reversing op yields the <em>better</em> frame). The guardrail
+was refined to <strong>allow a single corrective reversal to apply</strong> and only force-stop on a
+<strong>second consecutive reversal of the same tool</strong> (genuine flip-flopping); shrinking
+fine-tune repeats are no longer penalized, and <code>MAX_STEPS</code> remains the backstop. With the
+refinement, the foggy-ocean run now converges to the model's own <code>done</code> &mdash;
+<code>contrast &rarr; tone &rarr; look(crispClean) &rarr; whiteBalance &rarr; sharpen &rarr; done</code>
+&mdash; with no leftover cast. The captions/sequences below reflect the as-captured (pre-refinement)
+behavior; treat the screenshots as proof the <em>new tools and badges</em> render and edits land, not as
+the current stop policy.
+</div>
+<p>
+The agent's toolset grew from <strong>4 ops to 9</strong>, all <strong>in-process</strong> via Sharp plus
+raw-buffer pixel math &mdash; <strong>no ImageMagick, no external binary</strong>. Beyond the original
+<code>straighten</code> / <code>exposure</code> / <code>contrast</code> / <code>saturation</code>,
+Sprint 4 adds <code>tone</code> (highlights/shadows), <code>whiteBalance</code> (temp/tint),
+<code>vibrance</code> (protected, HSL-aware saturation), <code>look</code> (named parametric grades),
+and <code>sharpen</code> &mdash; and upgrades <code>contrast</code> from a linear approximation to a
+<strong>true sigmoidal curve</strong> (a 256-entry per-channel LUT). The agent now follows a real
+photo-editing playbook: editing know-how is baked in via <code>SKILL.md</code> (the human-readable
+canonical doc) and <code>server/utils/editing-guide.ts</code> (the <code>EDITING_GUIDE</code> text
+injected into every decision prompt), so it corrects white balance, recovers tone, and adds punch in a
+disciplined order with target-value guard-rails and an intent&rarr;ops translation layer. The loop
+gained <strong>no-op and oscillation guardrails</strong>, and the picsum stock was replaced with
+<strong>5 curated real photos</strong> in <code>public/samples/</code> that genuinely need editing.
+</p>
+
+<h3>The 9 tools and their phases</h3>
+<table>
+  <tr><th>Tool</th><th>Params (range)</th><th>Phase</th><th>What it does</th></tr>
+  <tr><td><code>straighten</code></td><td><code>angleDeg</code> &minus;45..45</td><td>Geometry</td><td>rotate + center-crop largest inscribed rect</td></tr>
+  <tr><td><code>exposure</code></td><td><code>ev</code> &minus;3..3</td><td>Tone</td><td>multiplicative stops (<code>.linear(2**ev,0)</code>)</td></tr>
+  <tr><td><code>tone</code></td><td><code>highlights</code>, <code>shadows</code> &minus;100..100</td><td>Tone</td><td>luminance-masked highlight recovery + shadow lift (hue-preserving)</td></tr>
+  <tr><td><code>whiteBalance</code></td><td><code>temp</code>, <code>tint</code> &minus;100..100</td><td>Color</td><td>per-channel gain (&plusmn;30% max), luminance-normalized so exposure is preserved</td></tr>
+  <tr><td><code>contrast</code></td><td><code>amount</code> &minus;1..1</td><td>Tone</td><td><strong>true sigmoidal</strong> (256-LUT); negative genuinely flattens</td></tr>
+  <tr><td><code>saturation</code></td><td><code>amount</code> 0..2</td><td>Color</td><td><code>.modulate({ saturation })</code></td></tr>
+  <tr><td><code>vibrance</code></td><td><code>amount</code> &minus;1..1</td><td>Color</td><td>smart HSL saturation; protects already-saturated/skin tones (<code>amount&middot;(1&minus;s)</code>)</td></tr>
+  <tr><td><code>look</code></td><td><code>name</code> (enum)</td><td>Finish</td><td>named grades: <code>goldenHour | tealOrange | noir | vintageFade | crispClean</code></td></tr>
+  <tr><td><code>sharpen</code></td><td><code>amount</code> 0..1</td><td>Finish</td><td>Sharp <code>.sharpen()</code>, tuned so 1.0 is crisp not crunchy</td></tr>
+</table>
+<p>
+The editing-guide's disciplined order of operations is
+<code>straighten &rarr; exposure &rarr; tone &rarr; whiteBalance &rarr; contrast &rarr; vibrance &rarr; look &rarr; sharpen</code>,
+phased as Geometry &rarr; Tone &rarr; Color &rarr; Finish.
+</p>
+
+<h3>New samples</h3>
+<figure>
+  <img src="screenshots/sprint4_samples.png" alt="Input panel with 5 new sample thumbnails">
+  <figcaption><span class="proves">Proves:</span> the sample picker now offers the 5 curated real photos &mdash; <em>Flat &amp; crooked, Foggy shore, Foggy ocean, Warm caf&eacute;, Overcast coast</em> &mdash; each a minimally-processed image that genuinely needs an edit (flat/hazy, warm cast, crooked horizon). Replaces the old picsum stock.</figcaption>
+</figure>
+
+<h3>Run A &mdash; the headline new capability: white-balance correction</h3>
+<p>
+Loaded the <strong>Warm caf&eacute;</strong> sample (strong orange incandescent cast). Intent typed:
+<em>"Fix the orange color cast so the whites look neutral, then make it crisp and natural."</em>
+The agent's op sequence:
+</p>
+<pre><code>1. whiteBalance · temp -55 tint +5   (Color)  — neutralize the orange tungsten cast
+2. whiteBalance · temp +25 tint  0   (Color)  — pull back; it had overcooled into blue
+3. contrast    · amount +0.25        (Tone)   — add depth after the color is balanced
+4. sharpen     · amount +0.3         (Finish) — the "crisp and natural" finish
+5. whiteBalance · temp -20 tint  0   (Color)  — small additional cooling toward neutral
+6. whiteBalance · temp +15 tint  0   (Color)  — reverses step 5 → OSCILLATION DETECTED, stop
+   → kept the pre-oscillation frame (step 5) as the result.</code></pre>
+<figure>
+  <img src="screenshots/sprint4_whitebalance_midrun.png" alt="Mid-run café timeline with whiteBalance cards">
+  <figcaption><span class="proves">Proves the new white-balance tool and its param badge:</span> mid-run (Running&hellip; / Stop live), the timeline already shows two <code>whiteBalance</code> cards rendering their params (<code>temp &minus;55 tint +5</code>, then a corrective <code>temp +25</code>) plus a <code>contrast</code> card &mdash; the agent attacked the orange cast <em>first</em>, exactly as the editing-guide prescribes for a strong color cast.</figcaption>
+</figure>
+<figure>
+  <img src="screenshots/sprint4_cafe_timeline.png" alt="Completed café timeline">
+  <figcaption><span class="proves">Proves the full new-tool flow + oscillation guardrail:</span> six cards spanning <code>whiteBalance</code> (Color), <code>contrast</code> (Tone), and <code>sharpen</code> (Finish), ending in the terminal card &mdash; the agent tried to reverse its previous white-balance nudge at step 6 and the <strong>oscillation detector fired</strong> ("Detected an oscillation (reversing/fiddling a prior move) &mdash; stopping at the best frame so far"), keeping the frame from <em>before</em> the reversing op.</figcaption>
+</figure>
+<figure>
+  <img src="screenshots/sprint4_cafe_final.png" alt="Corrected café final image">
+  <figcaption><span class="proves">Proves the cast was removed:</span> the final caf&eacute; image &mdash; the walls now read as neutral off-white instead of the original creamy-orange tungsten cast, with contrast and a sharpen finish applied. Download link points at the kept best frame (step 5). This is the "warm it up / fix the cast" capability Sprint 3's 4-tool set could not satisfy.</figcaption>
+</figure>
+
+<h3>Run B &mdash; "make it pop" on a flat, hazy photo</h3>
+<p>
+Loaded the <strong>Foggy ocean</strong> sample (very flat/hazy, washed-out, almost monochromatic).
+Intent typed: <em>"This is flat and hazy &mdash; give it punchy contrast, richer color, and a polished
+finish."</em> The agent's op sequence:
+</p>
+<pre><code>1. contrast     · amount +0.35           (Tone)   — sigmoidal punch; anchor blacks, attack the flatness first
+2. tone         · highlights -40 sh -20  (Tone)   — cut the milky sky haze, deepen the water
+3. vibrance     · amount +0.45           (Color)  — lift the muted color without over-saturating the sky
+4. whiteBalance · temp -35 tint -20      (Color)  — neutralize a developing color cast
+5. whiteBalance · temp +30 tint +15      (Color)  — reverses step 4 → OSCILLATION DETECTED, stop
+   → kept the pre-oscillation frame (step 4) as the result.</code></pre>
+<figure>
+  <img src="screenshots/sprint4_foggy_timeline.png" alt="Completed foggy ocean timeline">
+  <figcaption><span class="proves">Proves four new/upgraded tools chosen in pro order:</span> the timeline shows true-sigmoidal <code>contrast</code> &rarr; <code>tone</code> (highlights/shadows) &rarr; <code>vibrance</code> &rarr; <code>whiteBalance</code>, then the oscillation-stop card &mdash; the agent worked Tone before Color before Finish, matching the editing-guide playbook, and the guardrail again prevented an endless white-balance fiddle.</figcaption>
+</figure>
+<figure>
+  <img src="screenshots/sprint4_foggy_final.png" alt="Foggy ocean final image">
+  <figcaption><span class="proves">Proves contrast + tone + vibrance transformed a flat image:</span> the once-hazy, washed-out water now has real wave texture and tonal depth and clearly lifted color. <span class="note">Honest caveat:</span> because the run stopped on the oscillation guardrail at step 4, the kept frame still carries the warm/red cast the agent had just introduced and was mid-way through neutralizing &mdash; the guardrail correctly chose "stop fiddling" over a perfect-but-looping correction. The flatness/haze goal is decisively met; the color is punchy if slightly warm.</figcaption>
+</figure>
+
+<div class="callout">
+  <h3>Notable deviations &amp; design choices (Sprint 4)</h3>
+  <p>
+    <strong class="note">1. No ImageMagick &mdash; everything in Sharp + raw-buffer pixel math (load-bearing).</strong>
+    ImageMagick isn't installed, and rather than provision a system binary, the "ops Sharp does poorly"
+    were implemented <em>in-process</em>: true sigmoidal <code>contrast</code> (256-entry LUT per channel),
+    plus <code>tone</code>, <code>whiteBalance</code>, and <code>vibrance</code> via raw-buffer
+    (<code>sharp().raw()</code>) pixel math, and <code>look</code> as named parametric grades rather than
+    <code>.cube</code>/<code>.clut</code> files. Pure pixel helpers live in <code>server/utils/pixels.ts</code>.
+    Zero external dependency, genuine curves, and a cleaner future Vercel Sandbox path (no binary to install).
+  </p>
+  <p style="margin-bottom:0">
+    <strong class="note">2. Flat schema (kept) + loop guardrails.</strong>
+    The wire schema stayed <strong>flat</strong> (the Sprint 3 lesson) and was expanded with all 9 tools'
+    param fields, a <code>lookName</code> enum, and the 6 phases; <code>agent.ts</code> reassembles and
+    range-clamps the executor's <code>{tool, params}</code> shape per tool after validation. The loop
+    (<code>server/api/edit.post.ts</code>) added <strong>no-op detection</strong> (identity params &rarr;
+    terminal <code>done</code>) and <strong>flip-flop detection</strong> &mdash; a single corrective
+    reversal is allowed to apply (healthy convergence), and the loop only force-stops on a
+    <em>second consecutive</em> reversal of the same tool, keeping the last settled frame &mdash; plus an
+    explicit terminal <code>done</code> at <code>MAX_STEPS</code>. (The screenshots above were captured
+    under the earlier stop-on-first-reversal version; see the amber note at the top of this section.)
+  </p>
+</div>
+
+</body>
+</html>

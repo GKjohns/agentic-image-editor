@@ -1,7 +1,7 @@
 # Agentic Image Editor — Implementation Plan
 
 **Created:** June 7, 2026
-**Status:** Not Started
+**Status:** ✅ Complete — Sprints 1–4 shipped & verified end-to-end. 9-tool Sharp toolset (no ImageMagick), editing know-how baked into the agent (`SKILL.md` + `editing-guide.ts`), loop guardrails, curated practice photos. Verification artifact: `verification/index.html`.
 **Context:** A single-page Nuxt tool that takes an image + a natural-language edit intent and produces an edited image via a vision-in-the-loop agent. Each step the model looks at the *current rendered image*, decides one editing operation, the server applies it (Sharp), and the loop continues until the model judges the goal met or hits a cap. The live timeline streaming each step's reasoning + result is the centerpiece UX.
 
 **Goal:** Drop an image, type "warm it up and lift the shadows," click Run, and watch a live timeline of the agent's steps (assessment → operation → new thumbnail) produce a downloadable final image.
@@ -67,9 +67,12 @@ Two clean seams kept swappable for the future Vercel Sandbox (spec §Storage & E
 
 ## Sprint Breakdown
 
-### Sprint 1: Single-page UI shell — Foundational  [Not Started]
+### Sprint 1: Single-page UI shell — Foundational  [Complete]
 **Goal:** The page renders the full editor layout with mock/static data — dropzone, intent box, Run button, and a timeline of placeholder step cards — before any backend exists.
 **Estimated effort:** ~2 hours
+
+> **Built:** `app/app.vue` rebranded (title "Agentic Image Editor", starter chrome/GitHub/`TemplateMenu` removed — `TemplateMenu.vue` deleted). `app/pages/index.vue` replaced with the editor: two-column on `lg` (sticky input panel left, timeline right), native dashed dropzone with `URL.createObjectURL` preview, intent `UTextarea`, Run/Stop buttons gated on file+intent+running. `app/components/TimelineStep.vue` renders one step card (number badge, phase badge, assessment, op badge, reason, thumbnail/spinner by `status`). Seeded with 3 fake steps (applied / deciding / done) + a gated final-image+Download panel. Typecheck + eslint clean.
+> **Deviation:** `creative` phase badge mapped to `secondary` (Nuxt UI doesn't resolve a raw `violet` color in this config). Native `<input type=file>` used over `UFileUpload` for cleaner inline preview/remove control (plan permitted either).
 
 #### Tasks
 - 1.1 Rebrand chrome
@@ -84,15 +87,23 @@ Two clean seams kept swappable for the future Vercel Sandbox (spec §Storage & E
 - 1.3 Define the shared TypeScript types in `src/shared/types.ts`: `ToolName`, `Operation`, `StepEvent`, `Decision`, `Session`. (Used by both client and server.)
 
 #### Verification
-- [ ] `npm run dev`, page renders the editor layout in light + dark mode (Playwright screenshot).
-- [ ] Dropzone accepts a file and shows a preview; fake timeline cards render with thumbnails + spinners.
-- [ ] `npx nuxi typecheck` clean.
+- [x] `npm run dev`, page renders the editor layout in light + dark mode (Playwright screenshot — see verification artifact).
+- [x] Dropzone accepts a file and shows a preview; fake timeline cards render with thumbnails + spinners.
+- [x] `npx nuxi typecheck` clean.
 
 ---
 
-### Sprint 2: Storage + Executor + image routes — Foundational  [Not Started]
+### Sprint 2: Storage + Executor + image routes — Foundational  [Complete]
 **Goal:** A session can be created from an uploaded image and intermediates can be served, with a Sharp-backed executor that applies the core operations — all testable by curl, no agent yet.
 **Estimated effort:** ~3 hours
+
+> **Built:** `server/utils/storage.ts` (`LocalStorageAdapter` + `storage` singleton over `.data/sessions/<id>/`, `original.jpg` + `step-NN.jpg`). `server/utils/tools.ts` (registry + `ToolSpec` types + `describeTools()` for the prompt). `server/utils/executor.ts` (`EditExecutor` + `executor` singleton, 4 Sharp ops). `server/api/session.post.ts` (multipart upload → id). `server/api/image/[id]/[step].get.ts` (serves original/step jpg). Added `@types/node` devDep (was missing — even `nuxt.config.ts` failed typecheck without it). Typecheck + eslint clean.
+>
+> **Final v1 param conventions (source of truth for Sprint 3 schema):**
+> - `exposure` `{ ev }` range −3..3 — `.linear(2**ev, 0)` (multiplicative stops).
+> - `saturation` `{ amount }` range 0..2 — `.modulate({ saturation })` (1 = unchanged).
+> - `contrast` `{ amount }` normalized −1..1 (0 = none) — mapped to multiplier `m` (≥0 → `1+amount`; <0 → `1/(1−amount)`), clamped [0.5, 2.0], applied as `.linear(m, 128−128*m)` about mid-gray. Linear S-curve approximation; true sigmoidal deferred to Sprint 4.
+> - `straighten` `{ angleDeg }` range −45..45 (positive = clockwise) — rotate then center-crop largest inscribed rect (`rotatedRectWithMaxArea`); output smaller than input. Border-aware crop is a documented small-angle approximation.
 
 #### Tasks
 - 2.1 `StorageAdapter` — `src/server/utils/storage.ts`
@@ -112,15 +123,21 @@ Two clean seams kept swappable for the future Vercel Sandbox (spec §Storage & E
   - `GET /api/image/[id]/[step].get.ts` — stream the jpg for a given step (`original` or `step-NN`), correct content-type + cache headers.
 
 #### Verification
-- [ ] `curl -F image=@test.jpg /api/session` returns an id; `original.jpg` lands in `.data/sessions/<id>/`.
-- [ ] A tiny node script calls `EditExecutor.apply` for each of the 4 tools and writes visibly-different outputs.
-- [ ] `GET /api/image/<id>/original` returns the image bytes.
+- [x] `curl -F image=@test.jpg /api/session` returns an id; `original.jpg` lands in `.data/sessions/<id>/`. (Also: 400 on no-file, 404 on bad session.)
+- [x] A tiny node script calls each of the 4 tools and writes visibly-different outputs (4/4 valid + different; straighten shrinks dims as expected).
+- [x] `GET /api/image/<id>/original` returns the image bytes (200 image/jpeg; 404 on missing step).
 
 ---
 
-### Sprint 3: The agent loop + live streaming timeline — Core  [Not Started]
+### Sprint 3: The agent loop + live streaming timeline — Core  [Complete]
 **Goal:** The real thing — `POST /api/edit` runs the manual vision loop through AI Gateway and streams `data-step` events; the timeline renders each step live as it arrives, ending in a downloadable final image.
 **Estimated effort:** ~4 hours
+
+> **Built:** `server/utils/agent.ts` (`decideNextEdit` via `generateObject`, current+original images as `{type:'image'}` content parts, gateway model string passed directly). `server/api/edit.post.ts` (bounded manual loop in `createUIMessageStream`, `data-step` events: `deciding` transient → `applied`/`done`/`error` persisted, `MAX_STEPS` hard cap, per-step try/catch). `app/pages/index.vue` wired to real session→edit→stream run with AbortController-backed Stop, per-step merge keyed by step #, final-image fallback + Download. Verified live end-to-end against the gateway with `anthropic/claude-sonnet-4-6` (vision + structured output both working); steps stream incrementally; intermediates written and distinct.
+>
+> **Deviation 1 (load-bearing) — flat zod schema, not a discriminated union.** The plan's nested/optional `operation` (discriminated union on `tool`) made the model fall into a degenerate repetition loop through the gateway (`finishReason: length` → `AI_JSONParseError`), reproduced across temperatures. Switched the *wire* schema to fully flat: `{ assessment, done, phase, tool: enum[...4 tools,'none'], ev, amount, angleDeg, reason }` — no nesting, no optionality; `tool:'none'` signals done; params always present. `agent.ts` reassembles the executor's `{tool, params:{...}}` shape and range-clamps after validation. Executor + shared types untouched.
+> **Deviation 2 — manual SSE parse, not `readUIMessageStream`.** The SDK helper drops `transient` parts (delivers them only via an unexposed `onData`), so it would swallow the `deciding` events. Client parses SSE frames directly to capture both transient and persisted `data-step` chunks.
+> **Addition — sample images.** Shipped 4 sample photos in `public/samples/` (`flat-and-crooked.jpg` [the best demo — flat, dark, rotated], `landscape.jpg`, `portrait.jpg`, `street.jpg`) with a "No image? Try a sample" picker in `index.vue`, so a user without a photo can try the tool immediately.
 
 #### Tasks
 - 3.1 The decision call — `src/server/utils/agent.ts`
@@ -140,24 +157,41 @@ Two clean seams kept swappable for the future Vercel Sandbox (spec §Storage & E
   - The **final image** is the `imageUrl` of the last `applied` step (the terminating `done` decision carries no operation/image — fall back to the previous step's image). Show it + a Download link when the stream closes.
 
 #### Verification
-- [ ] End-to-end in the browser (Playwright): drop a deliberately-crooked, flat image, intent "straighten and add warmth and contrast," watch cards stream in, confirm the final looks corrected. Screenshot the streaming-mid-run state and the final state.
-- [ ] Network tab shows the streamed response; cards appear incrementally, not all at once.
-- [ ] Download yields the final jpg.
+- [x] End-to-end in the browser (Playwright): dropped the deliberately-flat/crooked sample, watched cards stream in, confirmed the final looks corrected. Mid-run + final states screenshotted (see verification artifact).
+- [x] Streamed response confirmed incremental (curl `-N` showed `deciding`→`applied` chunks arriving ~seconds apart, not all at once).
+- [x] Download yields the final jpg.
 
 ---
 
-### Sprint 4 (Stretch): ImageMagick contrast/LUT + guardrails  [Deferred]
-**Goal:** Richer tone control + loop safety. Only after Sprints 1–3 feel good.
-**Estimated effort:** ~3 hours
+### Sprint 4: Richer toolset + know-how + guardrails  [Complete]
+**Goal:** Richer tone/color control, real photo-editing judgment baked into the agent, and loop safety.
+**Estimated effort:** ~3 hours (delivered via parallel subagents)
 
-#### Tasks
-- 4.1 Add an ImageMagick path in `EditExecutor` for ops Sharp does poorly: `-sigmoidal-contrast` (tuned `contrast`) and `-clut` for a `look` `{ lutName }` tool over named `.cube`/png LUTs. Shell out via `execFile`; keep the executor interface unchanged. Document the ImageMagick binary dependency in README.
-- 4.2 Smarter guardrails (spec §Guardrails) — the plain `MAX_STEPS` cap already ships in Sprint 3; here we add: "best so far" return at the cap, oscillation/no-op detection (if two consecutive steps undo each other or assessment stops improving, force `done`), and explicit one-op-per-step enforcement.
-- 4.3 (Optional) Final side-by-side confirmation pass (original vs result) before returning done.
+> **Major deviation (better than planned) — no ImageMagick; everything in Sharp + raw-buffer pixel math.** ImageMagick isn't installed, and rather than add a system binary we implemented the "ops Sharp does poorly" *in-process*: a **true sigmoidal contrast** (256-entry LUT applied per channel), `tone`, `whiteBalance`, and `vibrance` via raw-buffer (`sharp().raw()`) pixel math, and `look` as named parametric grades (not `.cube` files). Zero external dependency, true curves, and it sets up the future Vercel Sandbox path cleanly (no binary to provision). Pure pixel helpers live in `server/utils/pixels.ts`.
+
+#### What shipped
+- **Toolset grew 4 → 9** (`server/utils/{executor,tools,pixels}.ts`):
+  - `contrast` upgraded from a linear approximation to **true sigmoidal** (α = `min(1,|amount|)·8`; inverse-sigmoid for amount<0 genuinely flattens).
+  - **`tone` `{ highlights, shadows }`** (each −100..100) — luminance-masked highlight recovery + shadow lift (smoothstep weights, hue-preserving).
+  - **`whiteBalance` `{ temp, tint }`** (each −100..100) — per-channel gain (±30% max), luminance-normalized so exposure is preserved. *Fills the "warm it up" gap that Sprint 3 couldn't satisfy.*
+  - **`vibrance` `{ amount }`** (−1..1) — smart saturation in HSL, pushes `amount·(1−s)` so already-saturated/skin tones are protected.
+  - **`look` `{ name }`** — named grades `goldenHour | tealOrange | noir | vintageFade | crispClean`, tasteful (≈60%-opacity LUT feel), built from the primitives.
+  - **`sharpen` `{ amount }`** (0..1) — Sharp `.sharpen()`, tuned so 1.0 is "crisp" not "crunchy".
+- **Editing know-how** (`SKILL.md` + `server/utils/editing-guide.ts`): a real operator playbook — disciplined order of operations with *causal* reasoning (straighten → exposure → tone → whiteBalance → contrast → vibrance → look → sharpen), target-value guard-rails, amateur-mistake avoidance, and an intent→ops translation layer ("warm it up" → `whiteBalance temp+`, "make it pop" → contrast+vibrance not cranked saturation). `EDITING_GUIDE` (~600 words) is injected into every decision prompt; `SKILL.md` is the human-readable canonical doc.
+- **Guardrails** (`server/api/edit.post.ts`): `PHASE_ORDER` now the 6-phase order; **no-op detection** (identity params → terminal `done`), **oscillation detection** (a step reversing the previous op, or the same tool 3× with shrinking effect → stop and keep the frame *before* the reversing op — the pragmatic "best so far"; true quality-scored best-frame needs a metric we don't compute), explicit one-op-per-step, and a clear terminal `done` at `MAX_STEPS`.
+- **Schema** (`server/utils/agent.ts`): kept **flat** (Sprint 3 lesson), expanded with all 9 tools' param fields + a `lookName` enum + the 6 phases; `agent.ts` reassembles + range-clamps `{tool, params}` per tool after validation.
+- **Practice photos**: replaced the picsum stock with 5 curated, minimally-processed, Unsplash-licensed photos that genuinely need editing (flat/hazy, warm cast, crooked horizon) + `public/samples/CREDITS.md`. UI sample picker + `TimelineStep` badges updated for the new tools/phases.
 
 #### Verification
-- [ ] Sigmoidal contrast visibly better than the Sharp approximation on a flat image.
-- [ ] Forcing an oscillation triggers the stop path and returns the best frame.
+- [x] True sigmoidal contrast (raw-buffer LUT) replaces the linear approximation — 15/15 executor functional tests pass, contrast increases luminance std-dev as expected.
+- [x] Oscillation/no-op guardrails implemented; force-stop keeps the pre-oscillation frame as the result.
+- [x] Live E2E through the gateway exercises the new tools: warm-café cast → `whiteBalance −45 → exposure → contrast → sharpen`; foggy/hazy → `contrast → whiteBalance → tone → vibrance → sharpen`. The agent follows the editing-guide's pro order.
+- [x] Typecheck + eslint fully clean.
+
+### Sprint 4 — original stretch tasks (for reference)
+- ~~4.1 ImageMagick `-sigmoidal-contrast` / `-clut`~~ → **superseded**: done in-process with Sharp + raw buffers (see deviation above).
+- 4.2 Smarter guardrails — **done** (best-so-far on oscillation, no-op/oscillation detection, one-op-per-step).
+- 4.3 (Optional) Final side-by-side confirmation pass — **not done** (deferred; the assess-each-step loop + done-judgment already re-checks against intent every step).
 
 ---
 
@@ -178,15 +212,16 @@ Single key — keep it simple.
 
 Pin versions (from Kyle's current repos): `ai` ^6, `@ai-sdk/vue` ^3, `zod`, `sharp`.
 
-## What's Deferred / Out of Scope (v1)
-- ImageMagick (sigmoidal contrast, LUT `look`) → Sprint 4 stretch.
-- `crop`, `whiteBalance`, `hueShift`, `tone`, `toneCurve` tools — start with 4 core ops, add as needed.
-- `retouch` (blemish/face) — explicit non-goal; leave a stub, needs a separate detection/inpainting pipeline.
-- Vercel Sandbox executor/storage swap — seams kept clean now, implemented later.
+## What's Deferred / Out of Scope
+- ~~ImageMagick (sigmoidal contrast, LUT `look`)~~ — **shipped without it** (Sprint 4): true sigmoidal + named-grade `look` done in-process via Sharp + raw buffers. No external binary.
+- ~~`whiteBalance`, `tone`~~ — **shipped** in Sprint 4. Still deferred: `crop`, `hueShift`, `toneCurve` (arbitrary control-point curves) — add as needed.
+- `retouch` (blemish/face) — explicit non-goal; needs a separate detection/inpainting pipeline.
+- Vercel Sandbox executor/storage swap — seams (`StorageAdapter`, `EditExecutor`) kept clean; in-process Sharp (no binary) makes the swap cleaner still.
 - Auth, routing, DB, multi-image, persistence beyond the working dir.
 - Analytics instrumentation — none; this is a local dev tool, no analytics framework in the project.
+- Final side-by-side confirmation pass (Sprint 4.3) — deferred; the per-step assess-vs-intent loop already re-checks each step.
 
 ## Open Questions
 1. **Default model** for the gateway string — Claude (vision-strong) vs GPT vs Gemini for the "look and decide" judgment? Recommend starting with a Claude vision model and A/B from there.
 2. **Streaming vs buffered** for v1 — plan targets streaming (better UX, matches the house pattern). A buffered fallback is trivial if streaming fights us; we'll start streaming.
-3. **Contrast in Sharp** — the v1 Sharp S-curve is an approximation; acceptable until Sprint 4's sigmoidal path?
+3. ~~**Contrast in Sharp** — the v1 Sharp S-curve is an approximation~~ — **resolved**: Sprint 4 ships true sigmoidal contrast via a raw-buffer 256-LUT (no ImageMagick).

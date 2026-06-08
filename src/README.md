@@ -1,64 +1,89 @@
-# Nuxt Starter Template
+# Agentic Image Editor
 
-[![Nuxt UI](https://img.shields.io/badge/Made%20with-Nuxt%20UI-00DC82?logo=nuxt&labelColor=020420)](https://ui.nuxt.com)
+A single-page Nuxt tool: drop an image, type a natural-language edit intent (e.g.
+_"straighten the horizon, brighten it, make it pop"_), and watch a **vision-in-the-loop
+agent** edit it step by step. Each step the model **looks at the current rendered image**,
+decides one editing operation, the server applies it with Sharp, and the loop continues
+until the model judges the goal met (or hits a step cap). The live timeline streaming each
+step's reasoning + result is the centerpiece.
 
-Use this template to get started with [Nuxt UI](https://ui.nuxt.com) quickly.
-
-- [Live demo](https://starter-template.nuxt.dev/)
-- [Documentation](https://ui.nuxt.com/docs/getting-started/installation/nuxt)
-
-<a href="https://starter-template.nuxt.dev/" target="_blank">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://ui.nuxt.com/assets/templates/nuxt/starter-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="https://ui.nuxt.com/assets/templates/nuxt/starter-light.png">
-    <img alt="Nuxt Starter Template" src="https://ui.nuxt.com/assets/templates/nuxt/starter-light.png" width="830" height="466">
-  </picture>
-</a>
-
-> The starter template for Vue is on https://github.com/nuxt-ui-templates/starter-vue.
-
-## Quick Start
-
-```bash [Terminal]
-npm create nuxt@latest -- -t ui
-```
-
-## Deploy your own
-
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-name=starter&repository-url=https%3A%2F%2Fgithub.com%2Fnuxt-ui-templates%2Fstarter&demo-image=https%3A%2F%2Fui.nuxt.com%2Fassets%2Ftemplates%2Fnuxt%2Fstarter-dark.png&demo-url=https%3A%2F%2Fstarter-template.nuxt.dev%2F&demo-title=Nuxt%20Starter%20Template&demo-description=A%20minimal%20template%20to%20get%20started%20with%20Nuxt%20UI.)
-
-## Setup
-
-Make sure to install the dependencies:
+## Quick start
 
 ```bash
-pnpm install
+npm install
+cp .env.example .env   # then paste your Vercel AI Gateway key into AI_GATEWAY_API_KEY
+npm run dev            # http://localhost:3000
 ```
 
-## Development Server
+No image handy? The UI ships sample photos (a "No image? Try a sample" picker) — the
+**Flat & crooked** one best shows the agent at work.
 
-Start the development server on `http://localhost:3000`:
+> **macOS dev note:** the `dev` script sets `TMPDIR=/tmp`. Nuxt's vite-node uses a unix
+> socket, and the default macOS temp path (`/var/folders/…`) overflows the ~104-char unix
+> socket path limit, which 500s the dev server on boot. `/tmp` keeps the path short. Don't
+> remove it.
 
-```bash
-pnpm dev
+## How it works
+
+```
+Browser (app/pages/index.vue)
+  1. POST /api/session  (FormData: image)        → writes .data/sessions/<id>/original.jpg → { id }
+  2. POST /api/edit     { id, intent }  (stream)  → server runs the MANUAL vision loop:
+        for step in 1..MAX_STEPS:
+          decision = generateObject({ model: <gateway>, image: current, schema })  // vision + structured
+          emit data-step { status:'deciding', assessment, operation, reason }
+          if decision.done: break
+          newImg = executor.apply(current, decision.operation)                      // Sharp
+          emit data-step { status:'applied', imageUrl:/api/image/<id>/<step> }
+  3. GET  /api/image/<id>/<step>                  → serves each intermediate / final jpg
 ```
 
-## Production
+The loop is **manual** (not the AI SDK auto tool-roundtrip) so the model sees *new pixels*
+each step — that's what makes it self-correcting. Decisions stream over the AI SDK
+UI-message stream (`createUIMessageStream` + custom `data-step` parts) and the client
+consumes them with a plain `fetch` + SSE reader.
 
-Build the application for production:
+## Architecture seams (kept swappable for a future Vercel Sandbox)
 
-```bash
-pnpm build
-```
+- **`server/utils/storage.ts`** — `StorageAdapter`. v1 = local `.data/sessions/<id>/`. Later = Blob / Sandbox FS.
+- **`server/utils/executor.ts`** — `EditExecutor.apply(path, op) → Buffer`. v1 = in-process Sharp. Later = Sandbox.
+- **`server/utils/tools.ts`** — the tool registry (`describeTools()` feeds the prompt; also the source of truth for the decision schema).
+- **`server/utils/agent.ts`** — `decideNextEdit()` (the `generateObject` vision call).
 
-Locally preview production build:
+## Toolset (Sharp + raw-buffer pixel math — no ImageMagick)
 
-```bash
-pnpm preview
-```
+The agent chooses one op per step. Everything runs in-process: Sharp for geometry/encode,
+raw-buffer (`sharp().raw()`) pixel math for the tonal/color curves. No external binary —
+which also keeps the future Vercel Sandbox path clean. Pure helpers live in `server/utils/pixels.ts`.
 
-Check out the [deployment documentation](https://nuxt.com/docs/getting-started/deployment) for more information.
+| Phase | Tool | Params | Range | Effect |
+|-------|------|--------|-------|--------|
+| straighten | `straighten` | `angleDeg` | −45..45 | rotate + center-crop largest inscribed rect |
+| exposure | `exposure` | `ev` | −3..3 | brightness in stops (`.linear(2**ev, 0)`) |
+| exposure | `contrast` | `amount` | −1..1 | **true sigmoidal** S-curve via a 256-LUT (inverse curve flattens) |
+| tone | `tone` | `highlights`, `shadows` | each −100..100 | luminance-masked highlight recovery + shadow lift |
+| color | `whiteBalance` | `temp`, `tint` | each −100..100 | temp+ warmer / temp− cooler; tint+ magenta / tint− green |
+| color | `saturation` | `amount` | 0..2 (1 = none) | global `.modulate({ saturation })` (blunt) |
+| color | `vibrance` | `amount` | −1..1 | smart saturation; protects skin & already-vivid colors |
+| creative | `look` | `name` | enum | named grade: `goldenHour`/`tealOrange`/`noir`/`vintageFade`/`crispClean` |
+| finish | `sharpen` | `amount` | 0..1 | output sharpening (tuned so 1.0 is crisp, not crunchy) |
 
-## Renovate integration
+The agent's editing judgment — order of operations, target values, intent→ops translation —
+lives in [`../SKILL.md`](../SKILL.md) (human playbook) and `server/utils/editing-guide.ts`
+(the distilled policy injected into every decision prompt). The loop has no-op / oscillation
+detection (force-stop keeps the pre-oscillation frame) on top of the `MAX_STEPS` cap.
 
-Install [Renovate GitHub app](https://github.com/apps/renovate/installations/select_target) on your repository and you are good to go.
+## Environment
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `AI_GATEWAY_API_KEY` | Yes | Vercel AI Gateway key. Routes the vision model. |
+| `AGENT_MODEL` | No | Gateway model string (default `anthropic/claude-sonnet-4-6`). Swap providers without code changes. |
+| `MAX_STEPS` | No | Agent loop hard cap (default 8). |
+
+## Deferred (see `internal_docs/`)
+
+`crop` / `hueShift` / `toneCurve` (arbitrary control-point curves); `retouch` (needs a
+detection/inpainting pipeline — explicit non-goal); a final side-by-side confirmation pass;
+Vercel Sandbox executor swap; auth / DB / routing / multi-image. Full spec + implementation
+plan live in `../internal_docs/`.
