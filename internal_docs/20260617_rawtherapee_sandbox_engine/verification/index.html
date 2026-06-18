@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verification — RawTherapee Develop Engine on Vercel Sandbox</title>
+<style>
+  :root {
+    --ink: #1a1a1a;
+    --muted: #5c5c5c;
+    --faint: #8a8a8a;
+    --line: #e2e2e2;
+    --bg: #ffffff;
+    --panel: #f7f7f6;
+    --accent: #111;
+    --warn-bg: #fff8e6;
+    --warn-line: #e8d27a;
+    --ok: #1f7a3d;
+    --bad: #b02a2a;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    line-height: 1.6;
+    margin: 0;
+    padding: 0 24px 96px;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; }
+  header.page {
+    padding: 64px 0 36px;
+    border-bottom: 2px solid var(--ink);
+    margin-bottom: 8px;
+  }
+  .kicker {
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin: 0 0 14px;
+  }
+  h1 {
+    font-size: 30px;
+    line-height: 1.22;
+    margin: 0 0 18px;
+    letter-spacing: -0.01em;
+  }
+  .summary { font-size: 17px; color: var(--muted); margin: 0; max-width: 64ch; }
+  .meta {
+    margin-top: 22px;
+    font-size: 13px;
+    color: var(--faint);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 22px;
+  }
+  .meta b { color: var(--muted); font-weight: 600; }
+  h2 {
+    font-size: 22px;
+    margin: 56px 0 6px;
+    padding-top: 18px;
+    letter-spacing: -0.01em;
+  }
+  h2 .num { color: var(--faint); font-variant-numeric: tabular-nums; margin-right: 10px; }
+  h3 { font-size: 15px; margin: 30px 0 4px; color: var(--ink); }
+  .lede { color: var(--muted); margin: 6px 0 18px; max-width: 70ch; }
+  p { max-width: 72ch; }
+  figure { margin: 0 0 30px; }
+  figure img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--panel);
+  }
+  figcaption {
+    font-size: 13.5px;
+    color: var(--muted);
+    margin-top: 9px;
+    padding-left: 2px;
+    border-left: 2px solid var(--ink);
+    padding-left: 12px;
+    line-height: 1.5;
+  }
+  figcaption b { color: var(--ink); }
+  .grid2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+  @media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
+  .callout {
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-line);
+    border-radius: 8px;
+    padding: 20px 24px;
+    margin: 26px 0;
+  }
+  .callout h3 { margin-top: 0; }
+  .callout ol { margin: 10px 0 0; padding-left: 20px; }
+  .callout li { margin: 10px 0; max-width: 70ch; }
+  code, .mono {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.88em;
+  }
+  code {
+    background: var(--panel);
+    padding: 1px 5px;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+  }
+  pre {
+    background: #111;
+    color: #eaeaea;
+    padding: 16px 18px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 12.5px;
+    line-height: 1.55;
+  }
+  pre code { background: none; border: none; padding: 0; color: inherit; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 18px 0 8px;
+    font-size: 14px;
+  }
+  th, td {
+    text-align: left;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  th {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--faint);
+    border-bottom: 1.5px solid var(--ink);
+  }
+  td code { white-space: nowrap; }
+  .ok { color: var(--ok); font-weight: 600; }
+  .bad { color: var(--bad); font-weight: 600; }
+  .steps { counter-reset: step; list-style: none; padding-left: 0; margin: 18px 0; }
+  .steps li {
+    position: relative;
+    padding: 0 0 14px 38px;
+    max-width: 72ch;
+  }
+  .steps li::before {
+    counter-increment: step;
+    content: counter(step);
+    position: absolute;
+    left: 0; top: 0;
+    width: 24px; height: 24px;
+    background: var(--ink);
+    color: #fff;
+    border-radius: 50%;
+    text-align: center;
+    line-height: 24px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  footer.page {
+    margin-top: 72px;
+    padding-top: 20px;
+    border-top: 1px solid var(--line);
+    font-size: 12.5px;
+    color: var(--faint);
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="page">
+  <p class="kicker">Internal Verification Record · Phase 5</p>
+  <h1>RawTherapee Develop Engine on Vercel Sandbox</h1>
+  <p class="summary">
+    The render engine was swapped from hand-rolled Sharp pixel math to <b>RawTherapee</b>
+    (<code>rawtherapee-cli</code> driven by PP3 processing profiles), run from a local binary
+    in dev and inside a <b>Vercel Sandbox</b> microVM in production. The vision agent still
+    decides edits entirely in <b>semantic sliders</b> (a flat <code>DevelopConfig</code>) and
+    never learns the PP3 format; a single deterministic server-side mapper,
+    <code>configToPp3()</code>, translates those sliders to PP3. The agent loop and timeline UI
+    were preserved, not rewritten. This page is the durable proof that all four sprints landed
+    and were verified.
+  </p>
+  <div class="meta">
+    <span><b>Branch</b> rawtherapee-sandbox-engine</span>
+    <span><b>Status</b> Complete — 4/4 sprints landed &amp; verified</span>
+    <span><b>Verified</b> June 18, 2026</span>
+    <span><b>Engine</b> RawTherapee 5.12 (dev) · 5.11 (sandbox)</span>
+  </div>
+</header>
+
+<!-- ===================== SPRINT 1 ===================== -->
+<h2><span class="num">S1</span>The engine seam &amp; PP3 mapper</h2>
+<p class="lede">
+  Introduced the stateless <code>DevelopEngine</code> seam
+  (<code>renderConfig({ sessionId, originalPath, config })</code> + <code>dispose</code>) with
+  three interchangeable runners — <code>sharp</code> (legacy fallback), <code>rt-local</code>,
+  and <code>rt-sandbox</code> — selected by a <code>getEngine()</code> factory keyed on
+  <code>RT_EXECUTION</code>. The mapper <code>configToPp3()</code> became the one place that
+  knows PP3; the model never sees it. Five named looks ship as real <code>.pp3</code> base
+  profiles layered under the agent's delta. Verified by rendering a clean warm grade, a noir
+  look, and — the headline — a heavy vibrance pass that is skin-safe with zero neon
+  over-saturation, killing the old bug via <code>[Vibrance] ProtectSkins=true</code>.
+</p>
+
+<figure>
+  <img src="screenshots/sprint1_rtlocal_warm.jpg" alt="Warm render via RawTherapee">
+  <figcaption>
+    <b>Proves the rt-local runner produces a clean photographic render.</b> A warming white-balance
+    grade (<code>[White Balance] Setting=Custom</code>, raised Temperature) rendered by
+    <code>rawtherapee-cli</code> — natural tones, no artifacts. This is the path Sharp pixel
+    math replaced.
+  </figcaption>
+</figure>
+
+<div class="grid2">
+  <figure>
+    <img src="screenshots/sprint1_rtlocal_noir.jpg" alt="Noir look base">
+    <figcaption>
+      <b>Proves the look base profiles apply correctly.</b> The <code>noir</code>
+      <code>.pp3</code> base, layered under the agent delta, yields a clean high-contrast
+      monochrome grade — confirming the <code>-p look.pp3 -p delta.pp3</code> layering works.
+    </figcaption>
+  </figure>
+  <figure>
+    <img src="screenshots/sprint1_rtlocal_vibrance_clean.jpg" alt="Vibrance 0.9, skin-safe, no neon">
+    <figcaption>
+      <b>Proves the neon vibrance bug is dead.</b> Vibrance pushed to <b>0.9</b> — the strength
+      that previously produced a radioactive over-saturated render. Mapped to
+      <code>[Vibrance] Pastels</code> with <code>ProtectSkins=true</code>, the result is
+      saturated but natural; skin and already-vivid hues are protected.
+    </figcaption>
+  </figure>
+</div>
+
+<!-- ===================== SPRINT 2 ===================== -->
+<h2><span class="num">S2</span>The Vercel Sandbox runner</h2>
+<p class="lede">
+  <code>RtSandboxEngine</code> runs RawTherapee inside a <code>@vercel/sandbox</code> microVM
+  with <b>per-session warm-VM reuse</b>: one upload of the original, then N renders against the
+  same VM, with <code>dispose</code> stopping the VM in the loop's <code>finally</code>. A
+  pre-baked snapshot ships RawTherapee plus the look profiles so session start is a fast
+  create-from-snapshot, not a reinstall. If auth or the snapshot is missing the engine degrades
+  gracefully (sandbox → local → sharp) and never hard-crashes a render. This sprint is backend
+  only — no screenshot; the live verification numbers are below.
+</p>
+
+<pre><code>=== Sprint 2 live verification (iad1 microVM, 2026-06-17) ===
+RawTherapee     5.11  (AppImage, pinned)   -- 5.12 needs glibc 2.35;
+                                              Amazon Linux 2023 ships 2.34
+Cold create     ~307 ms  create-from-snapshot (RT already baked, no dnf/AppImage step)
+Warm reuse      ~930 ms  second in-loop render, no re-upload of the original
+Full loop       create -> upload original -> writeFiles delta.pp3 -> runCommand
+                -> readFileToBuffer -> 268 KB clean JPEG, frames stream to timeline
+Dispose         run aborted mid-loop -> finally calls dispose() -> sandbox.stop();
+                no leaked VM (confirmed via vercel sandbox ls)
+Degradation     missing snapshot/auth -> falls back local -> sharp, one-line warn
+Snapshot id     RT_SNAPSHOT_ID=snap_iqiVWshEU5lx18IFYzbvR7ObFNGm
+                (set in Vercel project, dev + prod; expires 30d after last use)</code></pre>
+
+<!-- ===================== SPRINT 3 ===================== -->
+<h2><span class="num">S3</span>Richer parametric DevelopConfig</h2>
+<p class="lede">
+  Grew the flat <code>DevelopConfig</code> by 12 fields — a parametric 4-zone tone curve
+  (<code>tcHighlights/tcLights/tcDarks/tcShadows</code>), independent shadow/highlight
+  split-toning, <code>dehaze</code>, and luminance/chroma noise reduction — without breaking the
+  flat-schema discipline that guards against the Sonnet JSON-repetition loop. Held across 5 real
+  model runs at the doubled field count with zero <code>AI_JSONParseError</code>. Each new
+  control was pixel-graded against the binary, and the parametric tone-curve slot order was
+  verified directly (highlights → lights → darks → shadows).
+</p>
+
+<div class="grid2">
+  <figure>
+    <img src="screenshots/sprint3_tonecurve_shadows.jpg" alt="Parametric tone curve lifting shadows">
+    <figcaption>
+      <b>Proves the parametric tone curve moves the right zone.</b> Slot 7 (shadows) driven to
+      +80 lifts the darkest tones while leaving highlights untouched — confirming the verified
+      <code>Curve=2;…;h;l;d;s;</code> slot order is highlights-first, positive = brighten.
+    </figcaption>
+  </figure>
+  <figure>
+    <img src="screenshots/sprint3_splittone_cinematic.jpg" alt="Cinematic teal/orange split-tone">
+    <figcaption>
+      <b>Proves clean split-toning (regenerated with the shipped Splitco mapper).</b> Teal
+      shadows (hue 210) + warm highlights (hue 40) via <code>Method=Splitco</code>,
+      <code>Autosat=false</code>: shadows go bluer (mean B 94.7 → 109.6), highlights keep a warm
+      lean, channel order stays natural — <b>no</b> whole-image green. Compare the bug callout below.
+    </figcaption>
+  </figure>
+  <figure>
+    <img src="screenshots/sprint3_dehaze.jpg" alt="Dehaze cutting the atmospheric veil">
+    <figcaption>
+      <b>Proves dehaze cuts the veil and adds clarity.</b> <code>Strength=80</code> deepened mean
+      luminance (117.4 → 102.1) and raised local high-frequency detail (1.32 → 1.43) — the
+      expected direction for haze removal.
+    </figcaption>
+  </figure>
+  <figure>
+    <img src="screenshots/sprint3_noise_reduction.jpg" alt="Directional pyramid denoising">
+    <figcaption>
+      <b>Proves noise reduction smooths grain.</b> <code>Luma=80 Chroma=80</code> cut local
+      high-frequency energy (1.32 → 0.87, ≈34% smoother) via
+      <code>[Directional Pyramid Denoising] Method=Lab</code>.
+    </figcaption>
+  </figure>
+</div>
+
+<!-- ===================== SPRINT 4 ===================== -->
+<h2><span class="num">S4</span>useChat client &amp; multi-turn refinement</h2>
+<p class="lede">
+  Replaced the bespoke <code>fetch</code>/SSE client in <code>index.vue</code> with
+  <code>@ai-sdk/vue</code>'s <code>useChat</code> (deleting ~95 lines of stream plumbing).
+  Multi-turn refinement ("now make it cooler") appends frames onto the last result via
+  <code>sendMessage(…, { body: { id, fromStep } })</code> rather than restarting. The
+  <code>deciding</code> part was made non-transient so the spinner survives a re-render. While
+  verifying, a second neon bug surfaced — split-tone tinting the whole image green — and was
+  fixed by switching the mapper from <code>RGBSliders</code> to <code>Splitco</code>. A full
+  "warmer → cinematic" conversation converges in 5 steps.
+</p>
+
+<figure>
+  <img src="screenshots/sprint4_timeline_streaming.png" alt="Frames streaming into the timeline">
+  <figcaption>
+    <b>Proves frames stream into the timeline under useChat.</b> The <code>data-step</code> parts
+    render as timeline cards as each render completes — the SSE-to-useChat swap preserved the
+    streaming behavior exactly.
+  </figcaption>
+</figure>
+
+<figure>
+  <img src="screenshots/sprint4_deciding_spinner.png" alt="Deciding spinner persisting">
+  <figcaption>
+    <b>Proves the deciding spinner survives.</b> Making the <code>deciding</code> part
+    non-transient keeps the "thinking" indicator on screen through re-renders instead of
+    flickering out — the fix for the disappearing-spinner edge.
+  </figcaption>
+</figure>
+
+<figure>
+  <img src="screenshots/sprint4_multiturn_appended.png" alt="Follow-up turn appending frames from last result">
+  <figcaption>
+    <b>The key multi-turn proof: a follow-up appends, it does not restart.</b> A second intent
+    continues from the last result's frame (<code>fromStep</code>) and adds new timeline steps on
+    top of the existing run — confirming refinement is additive, not a fresh session.
+  </figcaption>
+</figure>
+
+<div class="grid2">
+  <figure>
+    <img src="screenshots/sprint4_lightbox.png" alt="Lightbox view of a rendered frame">
+    <figcaption>
+      <b>Proves the lightbox still opens rendered frames.</b> Clicking a timeline frame opens the
+      full-resolution RawTherapee output — the existing <code>ImageLightbox</code> component
+      survived the client refactor.
+    </figcaption>
+  </figure>
+  <figure>
+    <img src="screenshots/sprint4_dark_mode.png" alt="App in dark mode">
+    <figcaption>
+      <b>Proves the monochrome theme renders end-to-end.</b> The dark theme is intact across the
+      setup, running, and done views after the <code>useChat</code> migration.
+    </figcaption>
+  </figure>
+</div>
+
+<!-- ===================== BUGS KILLED ===================== -->
+<h2><span class="num">★</span>Key bugs killed</h2>
+<div class="callout">
+  <h3>Two neon over-saturation bugs — the headline robustness wins</h3>
+  <ol>
+    <li>
+      <b>Vibrance over-saturation (Sprint 1).</b> Pushing saturation without skin protection
+      produced a radioactive, neon render at high vibrance. Fixed by routing "vibrance" to
+      <code>[Vibrance] Pastels</code> with <code>ProtectSkins=true</code> — never to
+      <code>[Exposure] Saturation</code>. Verified clean at vibrance 0.9
+      (<span class="mono">sprint1_rtlocal_vibrance_clean.jpg</span>).
+    </li>
+    <li>
+      <b>Split-tone whole-image green (found &amp; fixed Sprint 4).</b> The original split-tone
+      mapper emitted <code>Method=RGBSliders</code> as a partial PP3. Without the GUI-authored
+      <code>OpacityCurve</code>/<code>ColorCurve</code> keys it requires, RawTherapee fell back to
+      a broken default curve that tinted the <i>entire</i> frame a violent neon green (channel
+      stats on the old render: R=75, <b>G=128</b>, B=110 — green dominant, red crushed). Fixed by
+      switching to <code>Method=Splitco</code> with <code>Autosat=false</code> and per-zone
+      <code>Saturation;Hue;</code> pairs, which needs no curves. The regenerated proof shows
+      natural channel order (R=126 &gt; G=112) with teal shadows.
+    </li>
+  </ol>
+</div>
+
+<!-- ===================== END TO END ===================== -->
+<h2><span class="num">E2E</span>The golden path</h2>
+<p class="lede">
+  How a single edit flows through the system end to end — the agent reasons in semantic sliders,
+  the server deterministically renders, and refinement is additive.
+</p>
+<ol class="steps">
+  <li><b>Upload.</b> A JPEG is normalized via Sharp and written as <code>original.jpg</code> for the session.</li>
+  <li><b>Semantic decision.</b> The vision agent reads the image + intent and emits a flat <code>DevelopConfig</code> — pure semantic sliders, no PP3.</li>
+  <li><b>configToPp3.</b> The server deterministically maps non-identity fields to a partial PP3 delta (the only place that knows the format).</li>
+  <li><b>Render.</b> RawTherapee renders <code>-p look.pp3 -p delta.pp3 -c original.jpg</code> — locally in dev, or in the warm Sandbox VM in prod.</li>
+  <li><b>Stream.</b> The output JPEG becomes a <code>data-step</code> frame streamed to the timeline via <code>useChat</code>.</li>
+  <li><b>Refine.</b> A follow-up intent ("now make it cooler") appends new frames from the last result via <code>fromStep</code> — it does not restart the session.</li>
+</ol>
+<p>
+  The Sprint 4 screenshots above trace this golden path in order:
+  <span class="mono">sprint4_timeline_streaming.png</span> (steps 4–5, frames streaming) →
+  <span class="mono">sprint4_deciding_spinner.png</span> (step 2, the agent deciding) →
+  <span class="mono">sprint4_multiturn_appended.png</span> (step 6, refinement appending).
+</p>
+
+<!-- ===================== DEVIATIONS ===================== -->
+<h2><span class="num">Δ</span>Deviations from plan</h2>
+<p class="lede">Real findings that diverged from the plan's initial assumptions — all resolved against the binary.</p>
+<table>
+  <thead>
+    <tr><th>Area</th><th>Plan assumed</th><th>Shipped reality</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Tone-curve section</td>
+      <td><code>[ToneCurve]</code> section</td>
+      <td>No such section exists; the tone curve lives in <code>[Exposure]</code> (<code>Curve=</code>/<code>CurveMode</code>). Mapper corrected.</td>
+    </tr>
+    <tr>
+      <td>Sandbox RT version</td>
+      <td>Latest (5.12) AppImage</td>
+      <td>RawTherapee <b>5.11</b> — 5.12's bundled libjxl needs <code>GLIBC_2.35</code>; Amazon Linux 2023 ships glibc 2.34. PP3 keys are stable across 5.10–5.12.</td>
+    </tr>
+    <tr>
+      <td>Split-tone method</td>
+      <td><code>Method=RGBSliders</code></td>
+      <td><b><code>Method=Splitco</code></b> + <code>Autosat=false</code>. RGBSliders as a partial PP3 tinted the whole image green (needs GUI-authored curve keys).</td>
+    </tr>
+    <tr>
+      <td>Tone-curve slot order</td>
+      <td>Shadows-first (inferred)</td>
+      <td><b>Highlights-first</b> — verified by single-slider renders (slot 4 = highlights … slot 7 = shadows, positive = brighten).</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ===================== ENV / CONFIG ===================== -->
+<h2><span class="num">⚙</span>Environment &amp; config reference</h2>
+<table>
+  <thead>
+    <tr><th>Variable</th><th>Required</th><th>Description</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>RT_EXECUTION</code></td>
+      <td>no</td>
+      <td><code>sandbox</code> | <code>local</code> | <code>sharp</code> — selects the runner. Production default is <code>sandbox</code>; dev default <code>local</code>.</td>
+    </tr>
+    <tr>
+      <td><code>RT_BIN</code></td>
+      <td>dev only</td>
+      <td>Path to local <code>rawtherapee-cli</code> for <code>RT_EXECUTION=local</code>. Unused by the sandbox runner.</td>
+    </tr>
+    <tr>
+      <td><code>RT_SNAPSHOT_ID</code></td>
+      <td>for <code>sandbox</code></td>
+      <td>Snapshot id from <code>scripts/build-rt-snapshot.ts</code> (current: <code>snap_iqiVWshEU5lx18IFYzbvR7ObFNGm</code>). Expires 30d after last use.</td>
+    </tr>
+    <tr>
+      <td><code>VERCEL_OIDC_TOKEN</code></td>
+      <td>for <code>sandbox</code> (dev)</td>
+      <td>From <code>vercel env pull</code>; ~12h TTL in dev. Injected automatically in Vercel deploys.</td>
+    </tr>
+  </tbody>
+</table>
+<h3>Re-bake the snapshot</h3>
+<pre><code>cd src &amp;&amp; set -a &amp;&amp; . ./.env.local &amp;&amp; set +a \
+  &amp;&amp; node --experimental-strip-types scripts/build-rt-snapshot.ts
+# then: vercel env add RT_SNAPSHOT_ID {development,production}  &amp;&amp;  vercel env pull .env.local</code></pre>
+
+<footer class="page">
+  Verification artifact for the RawTherapee Develop Engine implementation plan
+  (<span class="mono">internal_docs/20260617_rawtherapee_sandbox_engine/</span>).
+  All screenshots are local to <span class="mono">screenshots/</span>. Generated June 18, 2026.
+</footer>
+
+</div>
+</body>
+</html>

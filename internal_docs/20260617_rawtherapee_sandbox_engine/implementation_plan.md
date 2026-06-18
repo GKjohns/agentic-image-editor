@@ -1,7 +1,7 @@
 # RawTherapee Develop Engine on Vercel Sandbox — Implementation Plan
 
 **Created:** June 17, 2026
-**Status:** Not Started
+**Status:** Complete — all 4 sprints landed & verified (June 18, 2026). Engine swap (Sprints 1–2) + richer config (Sprint 3) + useChat client (Sprint 4) done; local + live Vercel Sandbox both verified. See `verification/index.html`.
 **Context:** The agent currently renders each develop pass with hand-rolled Sharp pixel math (`server/utils/pixels.ts` + `executor.ts`) — approximate LUTs that re-implement a fraction of a real raw developer and produce artifacts (e.g. the vibrance "neon" bug, commit `1529cfa`). The (frozen) spec anticipated this exact move: *"The Sandbox payoff arrives when edits move beyond the fixed toolset… keep the executor boundary clean now so that transition is additive."*
 
 **Goal:** Replace the Sharp render engine with **RawTherapee** (`rawtherapee-cli` driven by PP3 processing profiles), executed in a **Vercel Sandbox** in production and a local binary in dev — without the vision agent ever learning the PP3 format, and without rewriting the agent loop or timeline UI.
@@ -76,7 +76,7 @@ The agent decides in **semantic sliders**; `configToPp3()` is the single seriali
 
 ## Sprint Breakdown
 
-### Sprint 1: PP3 mapper + DevelopEngine seam (Sharp + RT-local) — Foundational
+### Sprint 1: PP3 mapper + DevelopEngine seam (Sharp + RT-local) — Foundational  `[Complete]`
 **Goal:** Render the **current** `DevelopConfig` (9 ops) through `rawtherapee-cli` locally, behind the existing stateless engine seam, with **no neon vibrance and no artifacts** (the bar is "clean," not pixel-parity — RT's demosaic/sharpen defaults will look *different from* Sharp, and better). No sandbox, no schema changes.
 **Estimated effort:** 4–5 hours
 
@@ -98,7 +98,7 @@ The agent decides in **semantic sliders**; `configToPp3()` is the single seriali
 
 ---
 
-### Sprint 2: Vercel Sandbox runner — Production execution
+### Sprint 2: Vercel Sandbox runner — Production execution  `[Complete]`
 **Goal:** `RT_EXECUTION=sandbox` renders via `@vercel/sandbox` with RawTherapee pre-baked into a snapshot and the sandbox reused per session.
 **Estimated effort:** 5–6 hours
 
@@ -118,7 +118,7 @@ The agent decides in **semantic sliders**; `configToPp3()` is the single seriali
 
 ---
 
-### Sprint 3: Richer parametric DevelopConfig — the second robustness lever
+### Sprint 3: Richer parametric DevelopConfig — the second robustness lever  `[Complete]`
 **Goal:** Grow the flat config with RawTherapee-grade controls the agent can wield, so edits get genuinely more capable than the current global sliders.
 **Estimated effort:** 4–5 hours
 
@@ -142,7 +142,7 @@ The agent decides in **semantic sliders**; `configToPp3()` is the single seriali
 
 ---
 
-### Sprint 4: `useChat` client + multi-turn refinement
+### Sprint 4: `useChat` client + multi-turn refinement  `[Complete]`
 **Goal:** Swap the bespoke `fetch`/SSE client for `@ai-sdk/vue` `useChat`, enabling conversational refinement ("now make it warmer") while keeping the timeline and image state intact.
 **Estimated effort:** 4–5 hours
 
