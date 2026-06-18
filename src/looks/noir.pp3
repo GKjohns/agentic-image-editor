@@ -1,0 +1,15 @@
+[Version]
+AppVersion=5.12
+Version=352
+
+[Exposure]
+Contrast=45
+ShadowCompr=30
+
+[Black & White]
+Enabled=true
+Method=Desaturation
+Auto=false
+Setting=RGB-Rel
+Filter=None
+Algorithm=SP

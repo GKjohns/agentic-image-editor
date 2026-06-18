@@ -1,7 +1,7 @@
 import { createUIMessageStream, createUIMessageStreamResponse } from 'ai'
 import type { DevelopConfig, StepEvent } from '~~/shared/types'
 import { storage } from '~~/server/utils/storage'
-import { executor } from '~~/server/utils/executor'
+import { getEngine } from '~~/server/utils/engines'
 import { decideConfig, diffConfig, equalConfig } from '~~/server/utils/agent'
 
 interface EditRequestBody {
@@ -70,17 +70,36 @@ export default defineEventHandler(async (event) => {
   // MAX_STEPS = max re-look iterations (each re-renders the full config).
   const MAX_STEPS = parseInt(runtimeConfig.maxSteps) || 30
 
+  // The active develop runner (Sharp / RT-local / RT-sandbox) is chosen by
+  // RT_EXECUTION. `dispose(id)` runs in a `finally` so a stateful runner (the
+  // future sandbox VM) never leaks even on error/abort.
+  const engine = getEngine()
+
+  // Cold-start mitigation: kick off provisioning (sandbox VM create + one-time
+  // original upload) concurrently with the first `decideConfig()` vision call so
+  // it overlaps the model's first decision. Fire-and-forget, errors swallowed —
+  // the first real `renderConfig` re-awaits the same memoized provisioning and
+  // surfaces any genuine failure there. No-op for sharp/rt-local (no `warm`).
+  engine.warm?.(id, storage.pathFor(id, 'original')).catch(() => {})
+
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
-      // Emit a `data-step` part. `deciding` events are transient (ephemeral
-      // progress); `applied`/`done`/`error` persist. An `id` lets the client
-      // merge the persisted parts into one card per step.
-      const emit = (data: StepEvent, transient = false) => {
+      // Emit a `data-step` part. Every part carries a stable `id` of
+      // `step-<n>`; the AI SDK reconciles same-id, same-type parts by REPLACING
+      // the data in place (see HttpChatTransport stream handler), so a step's
+      // `deciding` part is upgraded to `applied`/`done` rather than duplicated —
+      // one card per step on the client with no side-buffer needed.
+      //
+      // NOTE (Sprint 4, Edge 1): `deciding` is now NON-transient. Transient
+      // parts are delivered to `onData` only and never land in `message.parts`,
+      // which would drop the "Deciding…" spinner from the derived timeline. By
+      // persisting it under the same `id`, the spinner shows and is then
+      // superseded by the rendered frame via in-place replacement.
+      const emit = (data: StepEvent) => {
         writer.write({
           type: 'data-step',
           id: `step-${data.step}`,
-          data,
-          transient
+          data
         })
       }
 
@@ -98,96 +117,106 @@ export default defineEventHandler(async (event) => {
       let lastAppliedStep = baseStep === 'original' ? 0 : baseStep
 
       // `iter` is the re-look iteration (1..MAX_STEPS); `step` is the actual frame
-      // number, continued after any existing frames so branches append.
-      for (let iter = 1; iter <= MAX_STEPS; iter++) {
-        const step = startOffset + iter
-        lastStep = step
-        try {
-          const decision = await decideConfig(
-            {
-              originalPath: storage.pathFor(id, 'original'),
-              currentPath,
-              intent,
-              currentConfig
-            },
-            model
-          )
+      // number, continued after any existing frames so branches append. The whole
+      // loop is wrapped so `engine.dispose(id)` always runs (a stateful sandbox
+      // runner must release its per-session VM even on early return / abort).
+      try {
+        for (let iter = 1; iter <= MAX_STEPS; iter++) {
+          const step = startOffset + iter
+          lastStep = step
+          try {
+            const decision = await decideConfig(
+              {
+                originalPath: storage.pathFor(id, 'original'),
+                currentPath,
+                intent,
+                currentConfig
+              },
+              model
+            )
 
-          const next = decision.config
+            const next = decision.config
 
-          // Ephemeral "deciding" card update — chips show this step's diff.
-          emit({
-            step,
-            status: 'deciding',
-            assessment: decision.assessment,
-            goal: decision.goal,
-            operations: diffConfig(currentConfig, next),
-            reason: decision.reason,
-            phase: decision.phase
-          }, true)
-
-          // Converged: model says done, OR the returned config is identical to the
-          // current one (nothing left to change). Keep the last applied frame.
-          if (decision.done || equalConfig(next, currentConfig)) {
+            // Ephemeral "deciding" card update — chips show this step's diff.
             emit({
               step,
-              status: 'done',
+              status: 'deciding',
               assessment: decision.assessment,
               goal: decision.goal,
+              operations: diffConfig(currentConfig, next),
               reason: decision.reason,
-              phase: decision.phase,
-              imageUrl: lastAppliedStep > 0
-                ? `/api/image/${id}/${lastAppliedStep}?t=${Date.now()}`
-                : undefined
+              phase: decision.phase
+            })
+
+            // Converged: model says done, OR the returned config is identical to
+            // the current one (nothing left to change). Keep the last applied frame.
+            if (decision.done || equalConfig(next, currentConfig)) {
+              emit({
+                step,
+                status: 'done',
+                assessment: decision.assessment,
+                goal: decision.goal,
+                reason: decision.reason,
+                phase: decision.phase,
+                imageUrl: lastAppliedStep > 0
+                  ? `/api/image/${id}/${lastAppliedStep}?t=${Date.now()}`
+                  : undefined
+              })
+              return
+            }
+
+            // Render the FULL config from the original — no compounding.
+            const prevConfig = currentConfig
+            const buf = await engine.renderConfig({
+              sessionId: id,
+              originalPath: storage.pathFor(id, 'original'),
+              config: next
+            })
+            await storage.writeStep(id, step, buf)
+            await storage.writeConfig(id, step, next)
+            currentConfig = next
+            currentPath = storage.pathFor(id, step)
+            lastAppliedStep = step
+            editCount++
+
+            emit({
+              step,
+              status: 'applied',
+              // Cache-buster: intermediates are served no-store, but this avoids any
+              // stale-render edge cases if a step number is ever reused.
+              imageUrl: `/api/image/${id}/${step}?t=${Date.now()}`,
+              assessment: decision.assessment,
+              goal: decision.goal,
+              operations: diffConfig(prevConfig, next),
+              config: next,
+              reason: decision.reason,
+              phase: decision.phase
+            })
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            emit({
+              step,
+              status: 'error',
+              error: message
             })
             return
           }
-
-          // Render the FULL config from the original — no compounding.
-          const prevConfig = currentConfig
-          const buf = await executor.renderConfig(storage.pathFor(id, 'original'), next)
-          await storage.writeStep(id, step, buf)
-          await storage.writeConfig(id, step, next)
-          currentConfig = next
-          currentPath = storage.pathFor(id, step)
-          lastAppliedStep = step
-          editCount++
-
-          emit({
-            step,
-            status: 'applied',
-            // Cache-buster: intermediates are served no-store, but this avoids any
-            // stale-render edge cases if a step number is ever reused.
-            imageUrl: `/api/image/${id}/${step}?t=${Date.now()}`,
-            assessment: decision.assessment,
-            goal: decision.goal,
-            operations: diffConfig(prevConfig, next),
-            config: next,
-            reason: decision.reason,
-            phase: decision.phase
-          })
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          emit({
-            step,
-            status: 'error',
-            error: message
-          })
-          return
         }
-      }
 
-      // Cap hit without an explicit done — close out with a terminal step so the
-      // client clearly knows the run ended at the cap. Final = last applied frame.
-      emit({
-        step: lastStep + 1,
-        status: 'done',
-        assessment: `Reached the ${MAX_STEPS}-iteration limit with ${editCount} renders applied.`,
-        reason: 'Stopping at the iteration cap; the last applied frame is the final result.',
-        imageUrl: lastAppliedStep > 0
-          ? `/api/image/${id}/${lastAppliedStep}?t=${Date.now()}`
-          : undefined
-      })
+        // Cap hit without an explicit done — close out with a terminal step so the
+        // client clearly knows the run ended at the cap. Final = last applied frame.
+        emit({
+          step: lastStep + 1,
+          status: 'done',
+          assessment: `Reached the ${MAX_STEPS}-iteration limit with ${editCount} renders applied.`,
+          reason: 'Stopping at the iteration cap; the last applied frame is the final result.',
+          imageUrl: lastAppliedStep > 0
+            ? `/api/image/${id}/${lastAppliedStep}?t=${Date.now()}`
+            : undefined
+        })
+      } finally {
+        await engine.dispose(id)
+      }
     }
   })
 

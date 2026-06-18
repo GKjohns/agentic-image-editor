@@ -11,10 +11,14 @@ export type ToolName
     | 'exposure' // tonal: overall brightness in stops
     | 'contrast' // tonal: true sigmoidal S-curve
     | 'tone' // tonal: independent highlight recovery + shadow lift
+    | 'toneCurve' // tonal: parametric 4-zone tone curve (highlights/lights/darks/shadows)
     | 'whiteBalance' // color: temperature (warm/cool) + tint (green/magenta)
     | 'saturation' // color: global saturation multiplier
     | 'vibrance' // color: smart saturation that protects already-saturated/skin tones
+    | 'splitTone' // creative: hue+sat tint for shadows and highlights independently
     | 'look' // creative: a named parametric grade
+    | 'dehaze' // finish: cut atmospheric haze, add clarity
+    | 'denoise' // finish: luminance + chroma noise reduction
     | 'sharpen' // finish: output sharpening
 
 /** Phases the planner is softly biased to move through (prior, not enforced). */
@@ -53,6 +57,27 @@ export interface DevelopConfig {
   saturation: number // 0..2 multiplier (1 = none)
   sharpen: number // 0..1      (0 = none)
   look: LookName | 'none'
+  // --- Sprint 3: RawTherapee-grade parametric controls (all flat, no nesting) ---
+  // Parametric tone curve (RT `[Exposure] Curve=2;...` weights). Each region
+  // -100..100, 0 = none. Lets the agent reshape one tonal zone without touching
+  // the others — finer than the highlights/shadows tone pair.
+  tcHighlights: number // -100..100 (0 = none) brightest zone
+  tcLights: number // -100..100 (0 = none) upper mids
+  tcDarks: number // -100..100 (0 = none) lower mids
+  tcShadows: number // -100..100 (0 = none) darkest zone
+  // Split-toning (RT `[ColorToning] Method=RGBSliders`). A hue+saturation tint
+  // applied independently to shadows and highlights — the cinematic teal/orange
+  // grade. Hue 0..360 (color wheel deg), saturation 0..100 (0 = no tint).
+  splitShadowHue: number // 0..360 (sat 0 = none)
+  splitShadowSat: number // 0..100 (0 = none)
+  splitHighlightHue: number // 0..360 (sat 0 = none)
+  splitHighlightSat: number // 0..100 (0 = none)
+  splitBalance: number // -100..100 (0 = none) shadow/highlight weighting
+  // Dehaze (RT `[Dehaze]`). 0..100, 0 = none. Cuts atmospheric haze, adds clarity.
+  dehaze: number // 0..100 (0 = none)
+  // Noise reduction (RT `[Directional Pyramid Denoising]`). 0..100, 0 = none.
+  nrLuminance: number // 0..100 (0 = none) luminance grain
+  nrChroma: number // 0..100 (0 = none) color speckle
 }
 
 /** Identity config: every slider at its no-change value. */
@@ -67,7 +92,19 @@ export const DEFAULT_CONFIG: DevelopConfig = {
   vibrance: 0,
   saturation: 1,
   sharpen: 0,
-  look: 'none'
+  look: 'none',
+  tcHighlights: 0,
+  tcLights: 0,
+  tcDarks: 0,
+  tcShadows: 0,
+  splitShadowHue: 0,
+  splitShadowSat: 0,
+  splitHighlightHue: 0,
+  splitHighlightSat: 0,
+  splitBalance: 0,
+  dehaze: 0,
+  nrLuminance: 0,
+  nrChroma: 0
 }
 
 /**
@@ -128,4 +165,23 @@ export interface Session {
   id: string
   intent?: string
   steps: number
+}
+
+/**
+ * The swappable develop runner. Renders a full `DevelopConfig` FROM the original
+ * to a JPEG buffer — the same stateless seam the executor exposes today, plus a
+ * `sessionId` (so a stateful runner can keep a warm worker keyed by session) and
+ * a `dispose` hook (so that worker never leaks). Sharp/RT-local implement
+ * `dispose` as a no-op; only the future sandbox runner keeps per-session state.
+ */
+export interface DevelopEngine {
+  renderConfig(args: { sessionId: string, originalPath: string, config: DevelopConfig }): Promise<Buffer>
+  dispose(sessionId: string): Promise<void>
+  /**
+   * OPTIONAL cold-start mitigation: pre-provision whatever the first render
+   * needs (the sandbox runner uses it to kick off VM creation + the one-time
+   * original upload). Fire-and-forget from the caller — best-effort, never
+   * awaited on the hot path. Sharp/RT-local omit it (nothing to warm).
+   */
+  warm?(sessionId: string, originalPath: string): Promise<void>
 }

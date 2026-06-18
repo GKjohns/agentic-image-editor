@@ -1,0 +1,17 @@
+[Version]
+AppVersion=5.12
+Version=352
+
+[Exposure]
+Contrast=16
+
+[Vibrance]
+Enabled=true
+Pastels=14
+Saturated=6
+ProtectSkins=true
+
+[Sharpening]
+Enabled=true
+Method=usm
+Amount=140

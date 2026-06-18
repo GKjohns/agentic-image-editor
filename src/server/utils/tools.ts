@@ -80,6 +80,36 @@ export const tools: Record<ToolName, ToolSpec> = {
       }
     }
   },
+  toneCurve: {
+    description:
+      'Parametric tone curve with four independent zones (highlights, lights, darks, shadows). Finer than the tone tool: reshape ONE tonal band without touching the others, e.g. lift only the deepest shadows while leaving mids and highlights exactly where they are. Reach for this when "highlights + shadows" is too coarse. Most edits do not need it — use the simpler tone tool first.',
+    params: {
+      highlights: {
+        type: 'number',
+        min: -100,
+        max: 100,
+        description: 'Brightest zone. Positive brightens, negative darkens. 0 = unchanged.'
+      },
+      lights: {
+        type: 'number',
+        min: -100,
+        max: 100,
+        description: 'Upper-midtone zone. Positive brightens, negative darkens. 0 = unchanged.'
+      },
+      darks: {
+        type: 'number',
+        min: -100,
+        max: 100,
+        description: 'Lower-midtone zone. Positive brightens, negative darkens. 0 = unchanged.'
+      },
+      shadows: {
+        type: 'number',
+        min: -100,
+        max: 100,
+        description: 'Darkest zone. Positive lifts/opens, negative deepens. 0 = unchanged.'
+      }
+    }
+  },
   whiteBalance: {
     description:
       'Correct or stylize color cast via temperature and tint. Use to warm up a cold image or cool down an orange one. Luminance is roughly preserved so it shifts color, not brightness.',
@@ -122,6 +152,42 @@ export const tools: Record<ToolName, ToolSpec> = {
       }
     }
   },
+  splitTone: {
+    description:
+      'Split-toning: tint shadows and highlights with independent colors (hue + saturation per zone). The cinematic teal-shadow / orange-highlight grade lives here. Prefer this over a named look when you want a custom, nuanced color grade — set shadowSat or highlightSat above 0 to engage a zone, leave at 0 to skip it. The shadow tint is stronger than the highlight tint (highlights are near-white and resist coloring).',
+    params: {
+      shadowHue: {
+        type: 'number',
+        min: 0,
+        max: 360,
+        description: 'Shadow tint color in degrees (0/360 = red, 40 = orange, 120 = green, 210 = teal/blue, 280 = purple). Only matters when shadowSat > 0.'
+      },
+      shadowSat: {
+        type: 'number',
+        min: 0,
+        max: 100,
+        description: 'Shadow tint strength. 0 = no shadow tint, 30-60 = a tasteful cinematic grade, 100 = heavy. 0 = unchanged.'
+      },
+      highlightHue: {
+        type: 'number',
+        min: 0,
+        max: 360,
+        description: 'Highlight tint color in degrees (40 = warm orange, 210 = cool blue). Only matters when highlightSat > 0.'
+      },
+      highlightSat: {
+        type: 'number',
+        min: 0,
+        max: 100,
+        description: 'Highlight tint strength. 0 = no highlight tint, 30-60 = subtle warmth. 0 = unchanged.'
+      },
+      balance: {
+        type: 'number',
+        min: -100,
+        max: 100,
+        description: 'Shadow/highlight weighting. Negative favors the shadow tint, positive the highlight tint. 0 = balanced/unchanged.'
+      }
+    }
+  },
   look: {
     description:
       'Apply a named creative color grade (a tasteful pro-LUT-style preset combining white balance, contrast, tone, and saturation). Pick one when the user wants a mood or finished aesthetic rather than a single adjustment.',
@@ -131,6 +197,36 @@ export const tools: Record<ToolName, ToolSpec> = {
         enum: ['goldenHour', 'tealOrange', 'noir', 'vintageFade', 'crispClean'],
         description:
           'Grade name. goldenHour = warm sunlit glow; tealOrange = cinematic teal shadows + orange highlights; noir = high-contrast black & white; vintageFade = faded milky warm retro; crispClean = neutral editorial polish, no color cast.'
+      }
+    }
+  },
+  dehaze: {
+    description:
+      'Cut atmospheric haze / fog and add clarity, restoring contrast and saturation lost to a milky veil. Reach for it only when the image is genuinely hazy or flat from atmosphere — it is not a general contrast tool. 0 = no change.',
+    params: {
+      amount: {
+        type: 'number',
+        min: 0,
+        max: 100,
+        description: 'Dehaze strength. 0 = none, 40-70 = typical haze cut, 100 = aggressive (can over-darken). 0 = unchanged.'
+      }
+    }
+  },
+  denoise: {
+    description:
+      'Reduce noise: luminance grain and chroma (color) speckle, independently. Use SPARINGLY and only on visibly noisy images (high-ISO, deep shadow lifts) — denoise softens detail, so over-applying makes the image plasticky. Most images need none.',
+    params: {
+      luminance: {
+        type: 'number',
+        min: 0,
+        max: 100,
+        description: 'Luminance (brightness grain) reduction. 0 = none, 20-40 = gentle, high values smear detail. 0 = unchanged.'
+      },
+      chroma: {
+        type: 'number',
+        min: 0,
+        max: 100,
+        description: 'Chroma (color speckle) reduction. Safer to push than luminance. 0 = none. 0 = unchanged.'
       }
     }
   },

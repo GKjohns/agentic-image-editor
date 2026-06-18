@@ -29,11 +29,15 @@ const phaseColor = computed(() => props.step.phase ? phaseColors[props.step.phas
 /**
  * Params that are NOT bipolar deltas centered on 0, so a leading `+` would mislead.
  * `saturation.amount` is a MULTIPLIER centered on 1 (0.7 = a reduction, not "+0.7");
- * `sharpen.amount` is a 0..1 magnitude. For these we show the bare number.
+ * `sharpen.amount` is a 0..1 magnitude; split-tone hue/sat, dehaze, and denoise are
+ * 0..N magnitudes/angles. For any param listed here we show the bare number.
  */
-const unsignedParams: Partial<Record<ToolName, string>> = {
-  saturation: 'amount',
-  sharpen: 'amount'
+const unsignedParams: Partial<Record<ToolName, string[]>> = {
+  saturation: ['amount'],
+  sharpen: ['amount'],
+  splitTone: ['shHue', 'shSat', 'hiHue', 'hiSat'],
+  dehaze: ['amount'],
+  denoise: ['luma', 'chroma']
 }
 
 /** Format one param value: signed deltas (e.g. "+35", "-10") unless unsigned. */
@@ -50,7 +54,7 @@ function opLabel(op: Operation): string {
   const parts = Object.entries(op.params).map(([k, v]) => {
     // `look` carries a single string `name` — render just the grade name.
     if (op.tool === 'look' && k === 'name') return String(v)
-    const signed = unsignedParams[op.tool] !== k
+    const signed = !(unsignedParams[op.tool]?.includes(k))
     return `${k} ${formatValue(v, signed)}`
   })
   return parts.length ? `${op.tool} · ${parts.join(' · ')}` : op.tool

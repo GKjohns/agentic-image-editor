@@ -37,6 +37,19 @@ const configSchema = z.object({
   sharpen: z.number().describe('sharpen strength, 0..1 (0 = none, 1 = max crisp). ABSOLUTE value (not a delta). 0 = unchanged.'),
   look: z.enum(['goldenHour', 'tealOrange', 'noir', 'vintageFade', 'crispClean', 'none'])
     .describe('Creative grade name, or "none" for no grade. ABSOLUTE value (not a delta).'),
+  // --- Sprint 3 parametric controls (flat — every field present, no nesting) ---
+  tcHighlights: z.number().describe('toneCurve highlights zone, -100..100 (+ brightens brightest tones). ABSOLUTE value. 0 = unchanged. Leave 0 unless the simple tone tool is too coarse.'),
+  tcLights: z.number().describe('toneCurve lights zone (upper mids), -100..100. ABSOLUTE value. 0 = unchanged.'),
+  tcDarks: z.number().describe('toneCurve darks zone (lower mids), -100..100. ABSOLUTE value. 0 = unchanged.'),
+  tcShadows: z.number().describe('toneCurve shadows zone (darkest tones), -100..100 (+ lifts/opens). ABSOLUTE value. 0 = unchanged.'),
+  splitShadowHue: z.number().describe('splitTone shadow hue, 0..360 deg (40=orange, 210=teal). Only matters when splitShadowSat>0. ABSOLUTE value.'),
+  splitShadowSat: z.number().describe('splitTone shadow tint strength, 0..100 (0 = no shadow tint). ABSOLUTE value. 0 = unchanged.'),
+  splitHighlightHue: z.number().describe('splitTone highlight hue, 0..360 deg. Only matters when splitHighlightSat>0. ABSOLUTE value.'),
+  splitHighlightSat: z.number().describe('splitTone highlight tint strength, 0..100 (0 = no highlight tint). ABSOLUTE value. 0 = unchanged.'),
+  splitBalance: z.number().describe('splitTone balance, -100..100 (- favors shadows, + favors highlights). ABSOLUTE value. 0 = unchanged.'),
+  dehaze: z.number().describe('dehaze strength, 0..100 (cuts haze/adds clarity). ABSOLUTE value. 0 = unchanged. Use only on genuinely hazy images.'),
+  nrLuminance: z.number().describe('denoise luminance, 0..100 (reduces grain). ABSOLUTE value. 0 = unchanged. Use sparingly.'),
+  nrChroma: z.number().describe('denoise chroma, 0..100 (reduces color speckle). ABSOLUTE value. 0 = unchanged. Use sparingly.'),
   reason: z.string().describe('Why this config is the right next move (or why the goal is met). One sentence.')
 })
 
@@ -72,7 +85,19 @@ function clampConfig(raw: ConfigObject): DevelopConfig {
     vibrance: clamp(raw.vibrance, -1, 1),
     saturation: clamp(raw.saturation, 0, 2),
     sharpen: clamp(raw.sharpen, 0, 1),
-    look: raw.look
+    look: raw.look,
+    tcHighlights: clamp(raw.tcHighlights, -100, 100),
+    tcLights: clamp(raw.tcLights, -100, 100),
+    tcDarks: clamp(raw.tcDarks, -100, 100),
+    tcShadows: clamp(raw.tcShadows, -100, 100),
+    splitShadowHue: clamp(raw.splitShadowHue, 0, 360),
+    splitShadowSat: clamp(raw.splitShadowSat, 0, 100),
+    splitHighlightHue: clamp(raw.splitHighlightHue, 0, 360),
+    splitHighlightSat: clamp(raw.splitHighlightSat, 0, 100),
+    splitBalance: clamp(raw.splitBalance, -100, 100),
+    dehaze: clamp(raw.dehaze, 0, 100),
+    nrLuminance: clamp(raw.nrLuminance, 0, 100),
+    nrChroma: clamp(raw.nrChroma, 0, 100)
   }
 }
 
@@ -94,7 +119,19 @@ export function configToText(config: DevelopConfig): string {
     `- vibrance: ${config.vibrance} (-1..1, 0 = none)`,
     `- saturation: ${config.saturation} (0..2, 1 = none)`,
     `- sharpen: ${config.sharpen} (0..1, 0 = none)`,
-    `- look: ${config.look}`
+    `- look: ${config.look}`,
+    `- tcHighlights: ${config.tcHighlights} (-100..100, 0 = none)`,
+    `- tcLights: ${config.tcLights} (-100..100, 0 = none)`,
+    `- tcDarks: ${config.tcDarks} (-100..100, 0 = none)`,
+    `- tcShadows: ${config.tcShadows} (-100..100, 0 = none)`,
+    `- splitShadowHue: ${config.splitShadowHue} (0..360 deg)`,
+    `- splitShadowSat: ${config.splitShadowSat} (0..100, 0 = none)`,
+    `- splitHighlightHue: ${config.splitHighlightHue} (0..360 deg)`,
+    `- splitHighlightSat: ${config.splitHighlightSat} (0..100, 0 = none)`,
+    `- splitBalance: ${config.splitBalance} (-100..100, 0 = none)`,
+    `- dehaze: ${config.dehaze} (0..100, 0 = none)`,
+    `- nrLuminance: ${config.nrLuminance} (0..100, 0 = none)`,
+    `- nrChroma: ${config.nrChroma} (0..100, 0 = none)`
   ].join('\n')
 }
 
@@ -118,6 +155,15 @@ export function diffConfig(prev: DevelopConfig, next: DevelopConfig): Operation[
   if (numChanged(prev.highlights, next.highlights) || numChanged(prev.shadows, next.shadows)) {
     ops.push({ tool: 'tone', params: { highlights: next.highlights, shadows: next.shadows } })
   }
+  if (numChanged(prev.tcHighlights, next.tcHighlights)
+    || numChanged(prev.tcLights, next.tcLights)
+    || numChanged(prev.tcDarks, next.tcDarks)
+    || numChanged(prev.tcShadows, next.tcShadows)) {
+    ops.push({
+      tool: 'toneCurve',
+      params: { hi: next.tcHighlights, lt: next.tcLights, dk: next.tcDarks, sh: next.tcShadows }
+    })
+  }
   if (numChanged(prev.temp, next.temp) || numChanged(prev.tint, next.tint)) {
     ops.push({ tool: 'whiteBalance', params: { temp: next.temp, tint: next.tint } })
   }
@@ -129,6 +175,31 @@ export function diffConfig(prev: DevelopConfig, next: DevelopConfig): Operation[
   }
   if (numChanged(prev.saturation, next.saturation)) {
     ops.push({ tool: 'saturation', params: { amount: next.saturation } })
+  }
+  if (numChanged(prev.splitShadowHue, next.splitShadowHue)
+    || numChanged(prev.splitShadowSat, next.splitShadowSat)
+    || numChanged(prev.splitHighlightHue, next.splitHighlightHue)
+    || numChanged(prev.splitHighlightSat, next.splitHighlightSat)
+    || numChanged(prev.splitBalance, next.splitBalance)) {
+    const params: Record<string, number> = {}
+    if (next.splitShadowSat > 0) {
+      params.shHue = next.splitShadowHue
+      params.shSat = next.splitShadowSat
+    }
+    if (next.splitHighlightSat > 0) {
+      params.hiHue = next.splitHighlightHue
+      params.hiSat = next.splitHighlightSat
+    }
+    if (numChanged(prev.splitBalance, next.splitBalance)) {
+      params.bal = next.splitBalance
+    }
+    ops.push({ tool: 'splitTone', params })
+  }
+  if (numChanged(prev.dehaze, next.dehaze)) {
+    ops.push({ tool: 'dehaze', params: { amount: next.dehaze } })
+  }
+  if (numChanged(prev.nrLuminance, next.nrLuminance) || numChanged(prev.nrChroma, next.nrChroma)) {
+    ops.push({ tool: 'denoise', params: { luma: next.nrLuminance, chroma: next.nrChroma } })
   }
   if (numChanged(prev.sharpen, next.sharpen)) {
     ops.push({ tool: 'sharpen', params: { amount: next.sharpen } })
@@ -157,6 +228,18 @@ export function equalConfig(a: DevelopConfig, b: DevelopConfig): boolean {
     && !numChanged(a.saturation, b.saturation)
     && !numChanged(a.sharpen, b.sharpen)
     && a.look === b.look
+    && !numChanged(a.tcHighlights, b.tcHighlights)
+    && !numChanged(a.tcLights, b.tcLights)
+    && !numChanged(a.tcDarks, b.tcDarks)
+    && !numChanged(a.tcShadows, b.tcShadows)
+    && !numChanged(a.splitShadowHue, b.splitShadowHue)
+    && !numChanged(a.splitShadowSat, b.splitShadowSat)
+    && !numChanged(a.splitHighlightHue, b.splitHighlightHue)
+    && !numChanged(a.splitHighlightSat, b.splitHighlightSat)
+    && !numChanged(a.splitBalance, b.splitBalance)
+    && !numChanged(a.dehaze, b.dehaze)
+    && !numChanged(a.nrLuminance, b.nrLuminance)
+    && !numChanged(a.nrChroma, b.nrChroma)
 }
 
 /**

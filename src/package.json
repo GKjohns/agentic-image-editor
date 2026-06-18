@@ -15,6 +15,7 @@
     "@iconify-json/lucide": "^1.2.111",
     "@iconify-json/simple-icons": "^1.2.84",
     "@nuxt/ui": "^4.8.1",
+    "@vercel/sandbox": "^2.2.1",
     "ai": "^6.0.197",
     "nuxt": "^4.4.6",
     "sharp": "^0.34.5",

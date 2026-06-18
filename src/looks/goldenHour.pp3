@@ -1,0 +1,19 @@
+[Version]
+AppVersion=5.12
+Version=352
+
+[Exposure]
+Contrast=12
+ShadowCompr=64
+
+[White Balance]
+Enabled=true
+Setting=Custom
+Temperature=7600
+Green=1.04
+
+[Vibrance]
+Enabled=true
+Pastels=18
+Saturated=8
+ProtectSkins=true
