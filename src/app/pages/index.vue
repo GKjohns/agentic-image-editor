@@ -1,13 +1,46 @@
 <script setup lang="ts">
+import { Chat } from '@ai-sdk/vue'
+import { DefaultChatTransport } from 'ai'
+import type { UIMessage } from 'ai'
 import type { StepEvent } from '#shared/types'
 import type { LightboxFrame } from '~/components/ImageLightbox.vue'
+
+// --- useChat (Vercel AI SDK) -------------------------------------------------
+// The interactive streaming client. The bespoke fetch + manual SSE reader is
+// gone; the SDK owns the transport, the message list, and abort. Image/timeline
+// state is still our own (`data-step` parts + plain client refs below).
+//
+// NOTE (Sprint 4, Edge 2 — unused history): `useChat` POSTs the FULL `messages[]`
+// on every send, but the server ignores it — all run state (session id, branch
+// point) is threaded through the request `body` in `run()`, NOT message history.
+// This is harmless (the server reads `id`/`intent`/`fromStep` off the body); do
+// not wire any run state through `messages` here, or it will silently no-op.
+//
+// `@ai-sdk/vue@3` exposes the `Chat` class (the Vue idiom; `messages`/`status`
+// are reactive getters) rather than a `useChat` composable — same contract.
+const chat = new Chat<UIMessage>({
+  transport: new DefaultChatTransport({
+    api: '/api/edit',
+    // The default transport posts its own `id` (the chat id) at the body root,
+    // which would shadow the session `id` the server reads. We take control of
+    // the request body: ship ONLY the per-call body (session id, intent, the
+    // optional branch point) plus `messages` for completeness. The session id
+    // from `run()`'s per-call `body` wins — no collision with the chat id.
+    prepareSendMessagesRequest: ({ messages, body }) => ({
+      body: { ...body, messages }
+    })
+  })
+})
 
 // --- Input state -------------------------------------------------------------
 const file = ref<File | null>(null)
 const previewUrl = ref<string | null>(null)
 const intent = ref('')
-const running = ref(false)
-const errorMessage = ref<string | null>(null)
+// A run is in flight while the SDK is submitting or streaming.
+const running = computed(() => chat.status === 'submitted' || chat.status === 'streaming')
+// Surface our own session/transport errors plus any SDK stream error.
+const localError = ref<string | null>(null)
+const errorMessage = computed(() => localError.value ?? chat.error?.message ?? null)
 
 function onFileChange(value: File | File[] | null) {
   const next = Array.isArray(value) ? value[0] ?? null : value
@@ -54,9 +87,24 @@ const fromStep = ref<number | null>(null)
 // null → default = last applied frame.
 const resultStep = ref<number | null>(null)
 
-// --- Timeline (live, keyed by step) -----------------------------------------
-const stepMap = ref<Map<number, StepEvent>>(new Map())
-const steps = computed(() => [...stepMap.value.values()].sort((a, b) => a.step - b.step))
+// --- Timeline (derived from the useChat message stream) ----------------------
+// Every server-emitted `data-step` part lands in `message.parts` (deciding is
+// non-transient — see edit.post.ts Edge 1). The SDK already de-dupes parts by
+// their stable `step-N` id (replacing data in place), but a refinement turn
+// produces a NEW assistant message, so we flatten across ALL messages and keep
+// the last event per step number (later status — applied/done — wins).
+const steps = computed<StepEvent[]>(() => {
+  const byStep = new Map<number, StepEvent>()
+  for (const message of chat.messages) {
+    for (const part of message.parts) {
+      if (part.type === 'data-step') {
+        const event = part.data as StepEvent
+        byStep.set(event.step, event)
+      }
+    }
+  }
+  return [...byStep.values()].sort((a, b) => a.step - b.step)
+})
 
 // All applied frames (have a rendered image), in order.
 const appliedSteps = computed(() => steps.value.filter(s => s.status === 'applied' && s.imageUrl))
@@ -86,7 +134,7 @@ const showFinal = computed(() => !running.value && !!finalImageUrl.value)
 // 'done'    → run finished: final image + Download, input still collapsed.
 const view = computed<'setup' | 'running' | 'done'>(() => {
   if (running.value) return 'running'
-  if (stepMap.value.size > 0) return 'done'
+  if (steps.value.length > 0) return 'done'
   return 'setup'
 })
 
@@ -113,8 +161,8 @@ const previewImageUrl = computed(() => {
 /** Reset back to a fresh setup screen (clears the run + keeps no image). */
 function newImage() {
   stop()
-  stepMap.value = new Map()
-  errorMessage.value = null
+  chat.messages = []
+  localError.value = null
   onFileChange(null)
   intent.value = ''
   sessionId.value = null
@@ -202,116 +250,70 @@ function undoLastStep() {
 
 const canUndo = computed(() => view.value === 'done' && appliedSteps.value.length >= 2)
 
-let controller: AbortController | null = null
-
-/** Merge an incoming StepEvent into the per-step card. */
-function mergeStep(event: StepEvent) {
-  const existing = stepMap.value.get(event.step)
-  const merged: StepEvent = existing ? { ...existing, ...event } : event
-  // A later `applied`/`done` shouldn't be clobbered back to `deciding` if events
-  // somehow arrive out of order; otherwise take the newest status.
-  stepMap.value.set(event.step, merged)
-  // Trigger reactivity on the Map.
-  stepMap.value = new Map(stepMap.value)
-}
-
-/** Parse the SSE UI-message stream, dispatching every `data-step` part. */
-async function readStream(body: ReadableStream<Uint8Array>) {
-  const reader = body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-
-    // SSE frames are separated by a blank line.
-    const frames = buffer.split('\n\n')
-    buffer = frames.pop() ?? ''
-
-    for (const frame of frames) {
-      for (const line of frame.split('\n')) {
-        if (!line.startsWith('data:')) continue
-        const payload = line.slice(5).trim()
-        if (!payload || payload === '[DONE]') continue
-        let chunk: { type?: string, data?: StepEvent }
-        try {
-          chunk = JSON.parse(payload)
-        } catch {
-          continue
-        }
-        if (chunk.type === 'data-step' && chunk.data) {
-          mergeStep(chunk.data)
-        }
-      }
-    }
-  }
-}
-
+/**
+ * Submit an edit run through `useChat`.
+ *
+ * State is threaded entirely via the request `body` (Edge 2/3) — `sendMessage`
+ * still POSTs the chat history, but the server only reads `id`/`intent`/`fromStep`
+ * off the body. The branch base frame (`fromStep`) is decided HERE, not from
+ * message history:
+ *   - explicit "Continue from here" (the `fromStep` ref) wins;
+ *   - else, a follow-up after a finished run continues from the current result
+ *     frame (conversational refinement — "now make it cooler" appends to the
+ *     timeline instead of restarting from the original);
+ *   - else (first run, no frames yet) base = original.
+ */
 async function run() {
   if (!canRun.value || running.value) return
-  running.value = true
-  errorMessage.value = null
-  controller = new AbortController()
+  localError.value = null
 
-  // A branch/continue run (fromStep set) APPENDS to the existing timeline and
-  // reuses the same session; only a truly fresh run wipes the cards.
-  const branching = fromStep.value !== null && !!sessionId.value
+  // The frame to branch FROM. A truly fresh first run leaves this null (server
+  // defaults to `original`); any continuation derives it so frames APPEND.
+  const branchFrom = fromStep.value ?? (sessionId.value ? effectiveResultStep.value : null)
+  const branching = branchFrom !== null && !!sessionId.value
   if (!branching) {
-    stepMap.value = new Map()
+    // Fresh run: clear the prior conversation/timeline and result override.
+    chat.messages = []
     resultStep.value = null
   }
 
   try {
     let id = sessionId.value
-    // 1. Create a session from the uploaded image (fresh run only).
+    // Create a session from the uploaded image (fresh run only).
     if (!branching || !id) {
       const form = new FormData()
       form.append('image', file.value!)
       const session = await $fetch<{ id: string }>('/api/session', {
         method: 'POST',
-        body: form,
-        signal: controller.signal
+        body: form
       })
       id = session.id
       sessionId.value = id
     }
 
-    // 2. Run the edit; stream the step events back via a plain fetch.
-    const res = await fetch('/api/edit', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        id,
-        intent: intent.value,
-        ...(branching ? { fromStep: fromStep.value } : {})
-      }),
-      signal: controller.signal
-    })
-
-    if (!res.ok || !res.body) {
-      throw new Error(`Edit request failed (${res.status})`)
-    }
-
-    await readStream(res.body)
+    // Hand off to the SDK: it owns the SSE transport + message stream. The body
+    // carries our run state; the server ignores the POSTed `messages` history.
+    await chat.sendMessage(
+      { text: intent.value },
+      {
+        body: {
+          id,
+          intent: intent.value,
+          ...(branching ? { fromStep: branchFrom } : {})
+        }
+      }
+    )
   } catch (error) {
-    if ((error as Error)?.name === 'AbortError') {
-      // User-initiated stop; not an error.
-    } else {
-      errorMessage.value = error instanceof Error ? error.message : String(error)
-    }
+    localError.value = error instanceof Error ? error.message : String(error)
   } finally {
-    running.value = false
-    controller = null
-    // One-shot: consume the branch point so the next plain Run is a fresh run.
+    // One-shot: consume an explicit branch point so the next plain Run derives
+    // its own continuation (or starts fresh).
     fromStep.value = null
   }
 }
 
 function stop() {
-  controller?.abort()
-  running.value = false
+  chat.stop()
 }
 </script>
 
