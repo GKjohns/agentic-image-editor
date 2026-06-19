@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Editor Cockpit Layout — Verification</title>
+<style>
+  :root {
+    --ink: #1c1d20;
+    --muted: #5c6066;
+    --dim: #898d94;
+    --line: #e3e5e8;
+    --bg: #fbfbfc;
+    --accent: #2f6fed;
+    --ok: #1f9d57;
+    --warn: #b97700;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+  }
+  .wrap {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 64px 28px 120px;
+  }
+  header.doc {
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 32px;
+    margin-bottom: 16px;
+  }
+  .eyebrow {
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin: 0 0 10px;
+  }
+  h1 {
+    font-size: 30px;
+    line-height: 1.25;
+    margin: 0 0 18px;
+    letter-spacing: -0.01em;
+  }
+  .meta {
+    font-size: 14px;
+    color: var(--muted);
+    margin: 0 0 18px;
+  }
+  .meta strong { color: var(--ink); font-weight: 600; }
+  .summary { color: var(--muted); font-size: 16.5px; margin: 0; }
+  .summary strong { color: var(--ink); font-weight: 600; }
+  section.sprint {
+    padding: 48px 0 8px;
+    border-top: 1px solid var(--line);
+  }
+  section.sprint:first-of-type { border-top: none; }
+  h2 {
+    font-size: 22px;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+  h2 .num {
+    color: var(--dim);
+    font-weight: 600;
+    margin-right: 10px;
+  }
+  .goal {
+    font-size: 15px;
+    color: var(--muted);
+    margin: 0 0 22px;
+    font-style: italic;
+  }
+  h3 {
+    font-size: 13px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin: 28px 0 12px;
+  }
+  ul.verified {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 14px;
+  }
+  ul.verified li {
+    position: relative;
+    padding-left: 28px;
+    margin-bottom: 10px;
+    font-size: 15px;
+    color: var(--ink);
+  }
+  ul.verified li::before {
+    content: "✓";
+    position: absolute;
+    left: 0;
+    top: 0;
+    color: var(--ok);
+    font-weight: 700;
+  }
+  ul.verified li code,
+  p code, figcaption code, .callout code {
+    background: #f0f1f3;
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 0.86em;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  figure {
+    margin: 26px 0;
+  }
+  figure img {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+  }
+  figcaption {
+    font-size: 13.5px;
+    color: var(--muted);
+    margin-top: 9px;
+    line-height: 1.5;
+  }
+  figcaption .tag {
+    display: inline-block;
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-right: 8px;
+    font-weight: 600;
+  }
+  .pair { }
+  @media (min-width: 680px) {
+    .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+    .pair figure { margin: 26px 0 0; }
+  }
+  ol.golden {
+    counter-reset: step;
+    list-style: none;
+    padding: 0;
+    margin: 24px 0 0;
+  }
+  ol.golden > li {
+    position: relative;
+    padding-left: 44px;
+    margin-bottom: 30px;
+  }
+  ol.golden > li::before {
+    counter-increment: step;
+    content: counter(step);
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--ink);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  ol.golden > li .step-h {
+    font-weight: 600;
+    font-size: 16px;
+    margin: 2px 0 6px;
+  }
+  ol.golden > li p {
+    margin: 0 0 4px;
+    font-size: 15px;
+    color: var(--muted);
+  }
+  ol.golden figure { margin: 16px 0 0; }
+  .callout {
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    background: #f6f8fe;
+    border-radius: 6px;
+    padding: 16px 18px;
+    margin: 26px 0 0;
+    font-size: 14.5px;
+    color: var(--muted);
+  }
+  .callout strong { color: var(--ink); font-weight: 600; }
+  .callout.warn {
+    border-left-color: var(--warn);
+    background: #fdf8ef;
+  }
+  footer.doc {
+    margin-top: 56px;
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+    font-size: 13px;
+    color: var(--dim);
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="doc">
+    <p class="eyebrow">Verification Artifact · Phase 5</p>
+    <h1>Editor Cockpit Layout — Redesign Verification</h1>
+    <p class="meta"><strong>Project:</strong> Agentic Image Editor (Nuxt 4) &nbsp;·&nbsp; <strong>Date:</strong> June 18, 2026 &nbsp;·&nbsp; <strong>Status:</strong> All 4 sprints complete</p>
+    <p class="summary">
+      This records the verification of the <strong>Lightroom Cockpit</strong> redesign. The previous experience treated an agentic photo edit like a chat transcript: a single spinning "Editing…" badge for progress, step cards stacked <em>below</em> the preview (so comparing frames meant scrolling), and the Stop / branch / use-as-result controls buried behind hover or a collapsed panel. The redesign replaces that with a fixed cockpit — a big <strong>sticky live stage</strong> that never goes blank, a horizontal <strong>filmstrip</strong> of every frame, a compact <strong>agent rail</strong> whose active step is pinned and whose selected row expands inline for reasoning, and a persistent <strong>command bar</strong> with an always-visible Stop plus interrupt-and-steer. The user always sees the picture, always knows the agent is working, and can branch, stop, or steer without scrolling or hunting. Scope was frontend-only — the agent loop, the <code>/api/edit</code> stream, and the <code>StepEvent</code> contract are untouched.
+    </p>
+  </header>
+
+  <!-- SPRINT 1 -->
+  <section class="sprint">
+    <h2><span class="num">Sprint 1</span>Cockpit shell + EditorStage</h2>
+    <p class="goal">Stand up the fixed cockpit layout and a prominent live stage that replaces the tiny "Editing…" badge with a captioned, animated working state.</p>
+
+    <h3>What was verified</h3>
+    <ul class="verified">
+      <li>Typecheck and lint pass; <code>grep -rn setupOpen src/app</code> returns no matches — the old setup-toggle state is fully removed.</li>
+      <li>During a run the stage stays fixed while frames stream; the working caption shows <code>Step N · {goal}</code> with an indeterminate animated progress bar instead of a static badge.</li>
+      <li>The stage shows the original during the first "deciding" beat — it is <strong>never blank</strong>.</li>
+      <li>On done, the stage shows the result frame with a Download button and a "Result" tag; clicking the stage opens the lightbox on the correct frame, matching the Download URL.</li>
+    </ul>
+
+    <div class="pair">
+      <figure>
+        <img src="screenshots/sprint1_stage_running.png" alt="Stage during a run showing the original frame with a deciding caption and animated progress bar">
+        <figcaption><span class="tag">Proves</span>The stage is never blank during the first "deciding" beat: the original frame is shown under a "Deciding the next move…" caption with an animated, indeterminate progress bar — replacing the old single spinning badge.</figcaption>
+      </figure>
+      <figure>
+        <img src="screenshots/sprint1_stage_done.png" alt="Stage on done showing the result frame with a Download button and Result tag">
+        <figcaption><span class="tag">Proves</span>On done the stage settles to the result frame with an accessible Download button and a "Result" tag — the download target is surfaced on the stage itself, not buried below a timeline.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- SPRINT 2 -->
+  <section class="sprint">
+    <h2><span class="num">Sprint 2</span>Filmstrip</h2>
+    <p class="goal">A horizontal strip of every frame so the user navigates the edit history with one glance and one click instead of scrolling — and can branch from any frame.</p>
+
+    <h3>What was verified</h3>
+    <ul class="verified">
+      <li>During a run, thumbnails appear left→right (Original → Step 1 → a trailing "…" shimmer tile) and the strip auto-follows the newest frame.</li>
+      <li>Clicking an earlier thumb pins the stage to that frame, surfaces a "Jump to latest" control, and moves the active ring to the selection; "Jump to latest" clears the pin and snaps back.</li>
+      <li>The always-visible branch button (<code>i-lucide-git-branch</code>, plus ⌥-click) on an earlier frame sets the branch point via <code>continueFrom</code> → <code>fromStep</code> — branching is not hover-gated.</li>
+      <li>"Use as result" moves the result flag from one frame to another (Step 2 → Step 1).</li>
+    </ul>
+
+    <div class="pair">
+      <figure>
+        <img src="screenshots/sprint2_filmstrip_running.png" alt="Filmstrip filling left to right with a trailing shimmer tile during a run">
+        <figcaption><span class="tag">Proves</span>Frames populate left→right while running, with a trailing "…" shimmer tile standing in for the in-flight step — progress history is visible at a glance.</figcaption>
+      </figure>
+      <figure>
+        <img src="screenshots/sprint2_filmstrip_done.png" alt="Completed filmstrip showing all frames">
+        <figcaption><span class="tag">Proves</span>On completion the filmstrip holds the full edit history (Original + every applied step) for one-click navigation.</figcaption>
+      </figure>
+    </div>
+    <div class="pair">
+      <figure>
+        <img src="screenshots/sprint2_pinned_step1.png" alt="Clicking Step 1 thumbnail pins the stage to that frame and shows Jump to latest">
+        <figcaption><span class="tag">Proves</span>Clicking Step 1 pins the stage to that frame (active ring follows the selection) and surfaces a "Jump to latest" control that re-engages auto-follow.</figcaption>
+      </figure>
+      <figure>
+        <img src="screenshots/sprint2_result_moved.png" alt="The result flag moved to a different frame after use as result">
+        <figcaption><span class="tag">Proves</span>The always-visible "use as result" flag moves the download target between frames — here the result flag has been relocated to a different step.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- SPRINT 3 -->
+  <section class="sprint">
+    <h2><span class="num">Sprint 3</span>Agent / History rail</h2>
+    <p class="goal">Replace the tall vertical timeline cards with a compact, scannable rail where the active step is pinned/emphasized and the selected row expands inline to show full reasoning — with branch/result actions always visible, not hover-gated.</p>
+
+    <h3>What was verified</h3>
+    <ul class="verified">
+      <li>Typecheck and lint pass; <code>grep -rn TimelineStep src/</code> is clean — the old card component is deleted and its label helpers moved into <code>utils/stepFormat.ts</code>.</li>
+      <li>The rail lists steps compactly (status icon/number · phase dot · truncated goal · op-chip count).</li>
+      <li>The active (deciding) step is emphasized with a "working…" caption and a primary ring/background.</li>
+      <li>Selecting a row expands it inline — op chips, assessment, reason, and always-visible Continue-from-here + Use-as-result buttons.</li>
+      <li>Selecting a rail row drives the stage frame and filmstrip active ring <strong>in sync</strong>; the buttons fire the <code>index.vue</code> handlers (verified <code>resultStep</code>/<code>fromStep</code> set in live component state).</li>
+    </ul>
+
+    <div class="pair">
+      <figure>
+        <img src="screenshots/sprint3_rail_running.png" alt="Agent rail listing steps compactly during a run">
+        <figcaption><span class="tag">Proves</span>The rail renders steps as compact one/two-line rows during a run — a scannable list, not a stack of full-width cards.</figcaption>
+      </figure>
+      <figure>
+        <img src="screenshots/sprint3_rail_active.png" alt="Active deciding step emphasized with a working caption and primary ring">
+        <figcaption><span class="tag">Proves</span>The active/deciding step is visually pinned — a "working…" caption plus a primary ring marks where the agent is right now.</figcaption>
+      </figure>
+    </div>
+    <div class="pair">
+      <figure>
+        <img src="screenshots/sprint3_rail_expanded.png" alt="A selected rail row expanded inline showing op chips, assessment, reason, and action buttons">
+        <figcaption><span class="tag">Proves</span>Selecting a row expands it inline — op chips, assessment, and reason — with the branch and use-as-result buttons always visible rather than hover-gated.</figcaption>
+      </figure>
+      <figure>
+        <img src="screenshots/sprint3_rail_sync.png" alt="Selecting a rail row drives the stage and filmstrip in sync">
+        <figcaption><span class="tag">Proves</span>Selection is shared state: choosing a rail row moves the filmstrip active ring and the stage frame together, so the three regions never disagree on what's focused.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- SPRINT 4 -->
+  <section class="sprint">
+    <h2><span class="num">Sprint 4</span>Command bar + interrupt-and-steer + responsive polish</h2>
+    <p class="goal">A persistent bottom command bar for steering with an always-visible Stop, the ability to interrupt a running edit and steer it from the current frame, and a layout that degrades gracefully on small screens.</p>
+
+    <h3>What was verified</h3>
+    <ul class="verified">
+      <li>The command bar (intent textarea + Send + always-visible Stop) is pinned at the bottom on both desktop (1440px) and mobile (390px); Stop is reachable mid-run without scrolling.</li>
+      <li>On done, Stop is disabled and the button reads "Send"; while running the button reads "Steer" and Send stays enabled.</li>
+      <li><strong>Interrupt-and-steer (real end-to-end run):</strong> a fresh run was interrupted mid-stream with a new instruction; the run halted, settled via a watch-based <code>waitForSettled</code> (not a guessed timeout), then branched from the on-stage frame and <strong>appended</strong> — final applied steps <code>[1, 2]</code>, continued and not reset.</li>
+      <li>A second <code>send()</code> fired immediately after the first was ignored by the <code>steering</code> re-entrancy guard — no overlapping runs.</li>
+      <li>The "continuing from Step N · ✕" branch chip renders and the ✕ clears <code>fromStep</code> / focuses the textarea.</li>
+      <li>On mobile (390px) the in-grid rail is hidden behind a "Steps" toggle that opens a <code>USlideover</code>, while the stage and command bar stay visible; keyboard ←/→ on the focused stage scrub the filmstrip.</li>
+    </ul>
+
+    <h3>Desktop</h3>
+    <figure>
+      <img src="screenshots/sprint4_desktop_done.png" alt="Full cockpit on desktop with the command bar pinned at the bottom">
+      <figcaption><span class="tag">Proves</span>The full cockpit on desktop — stage, filmstrip, agent rail, and the command bar pinned at the bottom — all visible at once with no page scroll.</figcaption>
+    </figure>
+    <div class="pair">
+      <figure>
+        <img src="screenshots/sprint4_desktop_chip_steer.png" alt="The continuing from Step N branch chip in the command bar">
+        <figcaption><span class="tag">Proves</span>When a branch point is set, the command bar shows a "continuing from Step N · ✕" chip so the branch context is explicit and clearable.</figcaption>
+      </figure>
+      <figure>
+        <img src="screenshots/sprint4_desktop_running_steer.png" alt="Send button reads Steer while a run is streaming">
+        <figcaption><span class="tag">Proves</span>While a run streams, the Send button reads "Steer" and stays enabled — the interrupt-and-steer affordance is legible mid-run, with Stop also always present.</figcaption>
+      </figure>
+    </div>
+
+    <h3>Mobile (390px)</h3>
+    <div class="pair">
+      <figure>
+        <img src="screenshots/sprint4_mobile_collapsed.png" alt="Mobile layout with the rail collapsed behind a Steps toggle">
+        <figcaption><span class="tag">Proves</span>At 390px the layout stacks: the rail collapses behind a "Steps" toggle while the stage and command bar stay visible — no wall of panels.</figcaption>
+      </figure>
+      <figure>
+        <img src="screenshots/sprint4_mobile_rail_open.png" alt="Mobile slideover open showing the full agent rail">
+        <figcaption><span class="tag">Proves</span>Tapping "Steps" opens a right slideover with the full rail (<code>!flex</code> beating the in-grid <code>hidden</code>), so mobile users still get the complete agent history on demand.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- GOLDEN PATH -->
+  <section class="sprint">
+    <h2>End-to-end golden path</h2>
+    <p class="goal">The full intended journey, in order, told through the screenshots that best capture each beat.</p>
+
+    <ol class="golden">
+      <li>
+        <p class="step-h">Setup → first run begins, stage stays live</p>
+        <p>The user loads an image and runs an edit. The moment the agent commits to its first step, the stage shows the original under a "Deciding the next move…" caption and an animated progress bar — it never goes blank, and the user immediately knows the agent is working.</p>
+        <figure>
+          <img src="screenshots/sprint1_stage_running.png" alt="Stage live during the first deciding beat">
+          <figcaption><span class="tag">Step 1</span>Live stage with the deciding caption and animated bar.</figcaption>
+        </figure>
+      </li>
+      <li>
+        <p class="step-h">Frames stream into the filmstrip and rail in sync</p>
+        <p>As the agent applies steps, frames fill the filmstrip left→right with a trailing shimmer tile, and the agent rail lists each step compactly with the active one emphasized. The three regions move together.</p>
+        <div class="pair">
+          <figure>
+            <img src="screenshots/sprint2_filmstrip_running.png" alt="Filmstrip filling during the run">
+            <figcaption><span class="tag">Step 2a</span>Filmstrip filling with a trailing shimmer tile.</figcaption>
+          </figure>
+          <figure>
+            <img src="screenshots/sprint3_rail_active.png" alt="Agent rail with the active step emphasized">
+            <figcaption><span class="tag">Step 2b</span>Rail with the active step pinned and emphasized.</figcaption>
+          </figure>
+        </div>
+      </li>
+      <li>
+        <p class="step-h">Pin an earlier frame to inspect it</p>
+        <p>The user clicks Step 1 in the filmstrip. The stage pins to that frame and a "Jump to latest" control appears — but the caption still reflects the active streaming step, so scrubbing back never hides that the agent is still working.</p>
+        <figure>
+          <img src="screenshots/sprint2_pinned_step1.png" alt="Stage pinned to Step 1 with Jump to latest visible">
+          <figcaption><span class="tag">Step 3</span>Pinned to Step 1 with "Jump to latest" surfaced.</figcaption>
+        </figure>
+      </li>
+      <li>
+        <p class="step-h">Interrupt and steer — new instruction appends, doesn't reset</p>
+        <p>Mid-stream the user types a new instruction and hits Send (now labelled "Steer"). The live run halts, settles via the watch-based <code>waitForSettled</code>, then branches from the on-stage frame and continues. This was a <strong>real end-to-end <code>/api/edit</code> run</strong>: frames continued to <code>[1, 2]</code> rather than resetting to <code>[1]</code>, and a double-Send was ignored by the <code>steering</code> guard so no two runs overlapped.</p>
+        <figure>
+          <img src="screenshots/sprint4_desktop_running_steer.png" alt="Send button reads Steer while the run streams">
+          <figcaption><span class="tag">Step 4</span>"Steer" affordance live mid-run; the new instruction appends from the current frame.</figcaption>
+        </figure>
+      </li>
+      <li>
+        <p class="step-h">Done — result on the stage with Download</p>
+        <p>When the run finishes, the stage settles to the result frame with a "Result" tag and an accessible Download button. A plain follow-up instruction from here continues from the result frame.</p>
+        <figure>
+          <img src="screenshots/sprint1_stage_done.png" alt="Stage on done with Download button and Result tag">
+          <figcaption><span class="tag">Step 5</span>Result frame on the stage with Download.</figcaption>
+        </figure>
+      </li>
+      <li>
+        <p class="step-h">Mobile — full rail on demand</p>
+        <p>On a 390px screen the same flow holds: stage and command bar stay visible, and the full agent rail is one "Steps" tap away in a slideover.</p>
+        <figure>
+          <img src="screenshots/sprint4_mobile_rail_open.png" alt="Mobile slideover showing the full rail">
+          <figcaption><span class="tag">Step 6</span>Mobile slideover with the complete agent rail.</figcaption>
+        </figure>
+      </li>
+    </ol>
+
+    <div class="callout">
+      <strong>The interrupt-and-steer test was a real live run.</strong> The steer was fired against the actual <code>/api/edit</code> stream (frames came from the live gateway): on interrupt the applied frames <em>continued</em> to <code>[1, 2]</code> rather than resetting to <code>[1]</code>, <code>fromStep</code> was consumed back to <code>null</code>, and an immediate second Send was dropped by the <code>steering</code> re-entrancy guard so no overlapping run could start.
+    </div>
+
+    <div class="callout warn">
+      <strong>Known caveat worth flagging on review.</strong> The AI Gateway was intermittently slow in the test environment, so a few intermediate-state captures (the populated multi-step rail and one desktop baseline) used a client-injected step stream pointed at real on-disk session frames, driving the same <code>steps</code> computed and render path — noted inline in the plan's sprint deviations. The interrupt-and-steer test itself, however, was a genuine end-to-end run against the live <code>/api/edit</code> stream, not an injection.
+    </div>
+  </section>
+
+  <footer class="doc">
+    Frontend-only redesign · agent loop, <code>/api/edit</code> stream, and <code>StepEvent</code> contract untouched · not in production (single-user local tool, disk-backed sessions).
+  </footer>
+
+</div>
+</body>
+</html>
