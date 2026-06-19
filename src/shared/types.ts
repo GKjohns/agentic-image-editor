@@ -150,7 +150,7 @@ export interface StepEvent {
   /** The full develop config after this step (absolute slider values). */
   config?: DevelopConfig
   /**
-   * Single-op field kept for backward compat with TimelineStep.vue. The server
+   * Single-op field kept for backward compat with older clients. The server
    * no longer populates it; new clients should read `operations`.
    */
   operation?: Operation

@@ -4,6 +4,7 @@ import { DefaultChatTransport } from 'ai'
 import type { UIMessage } from 'ai'
 import type { StepEvent } from '#shared/types'
 import type { LightboxFrame } from '~/components/ImageLightbox.vue'
+import type { FilmstripFrame } from '~/components/Filmstrip.vue'
 
 // --- useChat (Vercel AI SDK) -------------------------------------------------
 // The interactive streaming client. The bespoke fetch + manual SSE reader is
@@ -119,15 +120,6 @@ const lastAppliedStep = computed(() => {
 // "Use this as result" and "Undo last step"), else the last applied frame.
 const effectiveResultStep = computed(() => resultStep.value ?? lastAppliedStep.value)
 
-// The final / download image is the effective result frame's image.
-const finalImageUrl = computed(() => {
-  const step = effectiveResultStep.value
-  if (step === null) return null
-  return appliedSteps.value.find(s => s.step === step)?.imageUrl ?? null
-})
-
-const showFinal = computed(() => !running.value && !!finalImageUrl.value)
-
 // --- View state --------------------------------------------------------------
 // 'setup'   → no run yet: input panel is the hero, centered + roomy.
 // 'running' → a run is in flight: input collapses, large live preview takes over.
@@ -138,24 +130,65 @@ const view = computed<'setup' | 'running' | 'done'>(() => {
   return 'setup'
 })
 
-// Whether the (collapsible) input panel is expanded. In setup it's always the
-// hero; once a run starts it collapses, and the header button re-expands it.
-const setupOpen = ref(true)
-watch(view, (v) => {
-  setupOpen.value = v === 'setup'
+// --- Cockpit selection + pin rule (Sprint 1) ---------------------------------
+// `selectedStep` is which frame the cockpit (stage/filmstrip/rail) is focused on
+// — distinct from `resultStep` (the download target). `userPinned` governs
+// auto-follow: auto-follow is ON whenever `userPinned` is false.
+//   - while running && !userPinned: selectedStep tracks lastAppliedStep.
+//   - on running→done && !userPinned: selectedStep = effectiveResultStep.
+// `userPinned` is set true by clicking a frame (Sprint 2/3); it is cleared by
+// EXACTLY two actions: starting a new run() and "Jump to latest" (Sprint 2).
+// Nothing else touches it — so a pin set mid-run survives the done transition.
+const selectedStep = ref<number | 'original' | null>(null)
+const userPinned = ref(false)
+
+// Follow the latest applied frame while running (unless the user has pinned).
+watch(lastAppliedStep, (step) => {
+  if (running.value && !userPinned.value && step !== null) {
+    selectedStep.value = step
+  }
 })
 
-// The most-recent applied frame — drives the large live preview while running.
-const latestImageUrl = computed(() => {
-  const a = appliedSteps.value
-  return a.length ? a[a.length - 1]!.imageUrl ?? null : null
+// On the running→done transition, settle the selection on the result frame
+// (unless the user pinned a specific frame mid-run — the pin wins).
+watch(running, (now, was) => {
+  if (was && !now && !userPinned.value) {
+    selectedStep.value = effectiveResultStep.value
+  }
 })
 
-// What the big preview shows: the running live frame, the chosen result on done,
-// else the local input preview as a placeholder.
-const previewImageUrl = computed(() => {
-  if (view.value === 'done') return finalImageUrl.value
-  return latestImageUrl.value ?? previewUrl.value
+// The active (latest streaming) step — drives the stage's working caption
+// independently of `selectedStep`, so scrubbing back never hides progress.
+const activeStep = computed<StepEvent | null>(() => {
+  const all = steps.value
+  return all.length ? all[all.length - 1]! : null
+})
+
+// The image shown on the stage = the selected frame's image. Before the first
+// applied frame exists (lastAppliedStep === null) we fall back to the original
+// (or the local preview) so the stage is never blank during the first
+// "deciding" beat — preserving today's previewImageUrl behaviour.
+const selectedImageUrl = computed(() => {
+  const localOriginal = sessionId.value
+    ? `/api/image/${sessionId.value}/original`
+    : previewUrl.value
+
+  const sel = selectedStep.value
+  if (sel === null || sel === 'original') {
+    // null before the first applied frame, or an explicit "original" selection.
+    if (sel === null && lastAppliedStep.value !== null) {
+      // We have frames but no selection yet — show the latest applied frame.
+      return appliedSteps.value.find(s => s.step === lastAppliedStep.value)?.imageUrl ?? localOriginal
+    }
+    return localOriginal
+  }
+  return appliedSteps.value.find(s => s.step === sel)?.imageUrl ?? localOriginal
+})
+
+// Whether the frame on the stage is the current result (download target).
+const selectedIsResult = computed(() => {
+  const sel = selectedStep.value
+  return sel !== null && sel !== 'original' && sel === effectiveResultStep.value
 })
 
 /** Reset back to a fresh setup screen (clears the run + keeps no image). */
@@ -168,7 +201,17 @@ function newImage() {
   sessionId.value = null
   fromStep.value = null
   resultStep.value = null
+  selectedStep.value = null
+  userPinned.value = false
 }
+
+// --- Command bar + mobile rail (Sprint 4) ------------------------------------
+// Template ref to the command bar so "continue from here" can focus its input.
+const commandBar = ref<{ focus: () => void } | null>(null)
+// On < lg the rail lives behind a toggle (a slideover) so mobile isn't a wall of
+// panels — the stage + command bar stay visible. Desktop ignores this flag (the
+// rail is always shown in the grid via `lg:flex`).
+const railOpen = ref(false)
 
 // --- Lightbox ----------------------------------------------------------------
 const lightboxOpen = ref(false)
@@ -189,6 +232,22 @@ const lightboxFrames = computed<LightboxFrame[]>(() => {
       goal: s.goal,
       operations: s.operations
     })
+  }
+  return frames
+})
+
+// Frames for the filmstrip: the same original → applied-step ordering as the
+// lightbox, but carrying the `step` id the strip selects/branches/flags on.
+const filmstripFrames = computed<FilmstripFrame[]>(() => {
+  const frames: FilmstripFrame[] = []
+  const original = sessionId.value
+    ? `/api/image/${sessionId.value}/original`
+    : previewUrl.value
+  if (original) {
+    frames.push({ step: 'original', imageUrl: original, label: 'Original' })
+  }
+  for (const s of appliedSteps.value) {
+    frames.push({ step: s.step, imageUrl: s.imageUrl!, label: `Step ${s.step}` })
   }
   return frames
 })
@@ -221,19 +280,73 @@ function openLightbox(step: number | 'original', imageUrl?: string) {
   lightboxOpen.value = true
 }
 
-/** Open the lightbox on whatever the big preview currently shows. */
-function openPreviewLightbox() {
-  const step = effectiveResultStep.value
-  openLightbox(step ?? 'original')
+/** Open the lightbox on whatever the stage currently shows (by image path). */
+function openStageLightbox(imageUrl: string | null) {
+  const sel = selectedStep.value
+  openLightbox(sel ?? effectiveResultStep.value ?? 'original', imageUrl ?? undefined)
+}
+
+// --- Cockpit selection actions (Sprint 2) ------------------------------------
+/**
+ * Select a filmstrip/rail frame: pin the cockpit to it. Per the single pin rule,
+ * clicking a frame is what SETS `userPinned` — so the stage stops auto-following
+ * the latest frame and stays on this one (the caption still shows the agent
+ * working). The pin is cleared only by "Jump to latest" or starting a new run.
+ */
+function selectFrame(step: number | 'original') {
+  selectedStep.value = step
+  userPinned.value = true
+}
+
+/**
+ * Keyboard scrubbing: ←/→ move the selection one frame through the filmstrip
+ * (original → applied steps) when the stage is focused. Pins on first use (like
+ * a click), so arrowing back stops auto-follow just as clicking a thumb does.
+ */
+function scrubFrame(delta: number) {
+  const frames = filmstripFrames.value
+  if (!frames.length) return
+  const current = selectedStep.value ?? effectiveResultStep.value ?? frames[0]!.step
+  let idx = frames.findIndex(f => f.step === current)
+  if (idx < 0) idx = frames.length - 1
+  const next = frames[Math.min(frames.length - 1, Math.max(0, idx + delta))]
+  if (next) selectFrame(next.step)
+}
+
+function onStageKeydown(event: KeyboardEvent) {
+  if (event.key === 'ArrowLeft') {
+    event.preventDefault()
+    scrubFrame(-1)
+  } else if (event.key === 'ArrowRight') {
+    event.preventDefault()
+    scrubFrame(1)
+  }
+}
+
+/**
+ * "Jump to latest": clear the pin so auto-follow resumes (one of the two actions
+ * that may clear `userPinned`, the other being a new run()). We snap the
+ * selection to the latest frame now so the stage updates immediately rather than
+ * waiting for the next applied frame.
+ */
+function jumpToLatest() {
+  userPinned.value = false
+  selectedStep.value = running.value
+    ? (lastAppliedStep.value ?? 'original')
+    : effectiveResultStep.value
 }
 
 // --- Branch / result actions (Sprint 3) --------------------------------------
-/** "Continue from here": branch a new run off `step`, appending frames. */
+/**
+ * "Continue from here": branch a new run off `step`, appending frames. Sets the
+ * branch point (surfaced as the command bar's "Continuing from Step N" chip) +
+ * clears the result override, then focuses the command bar's intent input so the
+ * user can immediately type the steering instruction.
+ */
 function continueFrom(step: number) {
   fromStep.value = step
   resultStep.value = null
-  intent.value = ''
-  setupOpen.value = true
+  nextTick(() => commandBar.value?.focus())
 }
 
 /** "Use this as result": make `step` the download target / big preview. */
@@ -266,6 +379,9 @@ const canUndo = computed(() => view.value === 'done' && appliedSteps.value.lengt
 async function run() {
   if (!canRun.value || running.value) return
   localError.value = null
+
+  // Starting a run clears the pin so the stage auto-follows the new frames.
+  userPinned.value = false
 
   // The frame to branch FROM. A truly fresh first run leaves this null (server
   // defaults to `original`); any continuation derives it so frames APPEND.
@@ -315,6 +431,88 @@ async function run() {
 function stop() {
   chat.stop()
 }
+
+// --- Interrupt-and-steer (Sprint 4) ------------------------------------------
+// Re-entrancy guard: true from the moment an interrupt begins until the new run
+// has been kicked off. A second send() while mid-settle is ignored, so a rapid
+// double-tap (or Enter-spam) can't spawn two overlapping runs.
+const steering = ref(false)
+
+/**
+ * Wait for the SDK to actually settle out of an in-flight state after stop().
+ *
+ * `chat.stop()` aborts the transport but `chat.status` doesn't flip to a settled
+ * value synchronously — the SDK finishes tearing down the stream first. We must
+ * NOT start the next run until it has, or the new sendMessage() races the aborting
+ * one (two streams, interleaved `data-step` parts, frame numbers that don't append
+ * cleanly). So instead of guessing a fixed timeout, we WATCH the reactive status
+ * and resolve the moment it's no longer 'submitted'/'streaming'. A safety timeout
+ * is a fallback only — if the status somehow never settles we proceed anyway
+ * rather than hang the steer forever.
+ */
+function waitForSettled(timeoutMs = 4000): Promise<void> {
+  // Already settled — nothing to wait for.
+  if (chat.status !== 'submitted' && chat.status !== 'streaming') {
+    return Promise.resolve()
+  }
+  return new Promise((resolve) => {
+    let done = false
+    const finish = () => {
+      if (done) return
+      done = true
+      unwatch()
+      clearTimeout(timer)
+      resolve()
+    }
+    const unwatch = watch(
+      () => chat.status,
+      (status) => {
+        if (status !== 'submitted' && status !== 'streaming') finish()
+      }
+    )
+    // Safety net: never block the steer indefinitely on a stuck status.
+    const timer = setTimeout(finish, timeoutMs)
+  })
+}
+
+/**
+ * The command bar's single action. "Send" means different things by state:
+ *   - NOT running → behaves like run(): a fresh run, or (after a finished run)
+ *     a refinement that continues from the result frame. run() already derives
+ *     the right branch base, so we just call it.
+ *   - running → INTERRUPT-AND-STEER: stop the live run and continue from the
+ *     frame currently on the stage with the new instruction, so frames APPEND
+ *     from where the user stopped rather than restarting from the original.
+ */
+async function send() {
+  // Ignore re-entrant sends while an interrupt is still settling.
+  if (steering.value) return
+
+  if (!running.value) {
+    await run()
+    return
+  }
+
+  // --- Interrupt-and-steer ---------------------------------------------------
+  // 1) Capture the new instruction + the branch base BEFORE we stop, since the
+  //    user-visible selection can shift as the aborting stream tears down. The
+  //    base is the on-stage frame: the user's pin, else the result, else original.
+  const branchBase = selectedStep.value ?? effectiveResultStep.value ?? 'original'
+  steering.value = true
+  try {
+    // 2) Halt the current run.
+    stop()
+    // 3) Wait for the SDK to settle out of submitted/streaming (watch-based, not
+    //    a guessed timeout) so the new run doesn't race the aborting one.
+    await waitForSettled()
+    // 4) Point the next run at the captured base and run() — frames APPEND from
+    //    there. 'original' (no frames yet) means a plain fresh re-run.
+    fromStep.value = typeof branchBase === 'number' ? branchBase : null
+    await run()
+  } finally {
+    steering.value = false
+  }
+}
 </script>
 
 <template>
@@ -337,6 +535,16 @@ function stop() {
         v-if="view !== 'setup'"
         class="flex items-center gap-2 shrink-0"
       >
+        <!-- Mobile-only: open the agent rail (hidden in the grid on < lg). -->
+        <UButton
+          icon="i-lucide-list"
+          label="Steps"
+          color="neutral"
+          variant="subtle"
+          size="sm"
+          class="lg:hidden"
+          @click="railOpen = true"
+        />
         <UButton
           v-if="canUndo"
           icon="i-lucide-undo-2"
@@ -345,15 +553,6 @@ function stop() {
           variant="subtle"
           size="sm"
           @click="undoLastStep"
-        />
-        <UButton
-          icon="i-lucide-sliders-horizontal"
-          label="Edit setup"
-          color="neutral"
-          variant="subtle"
-          size="sm"
-          :class="setupOpen ? 'ring-1 ring-primary/40' : ''"
-          @click="setupOpen = !setupOpen"
         />
         <UButton
           icon="i-lucide-image-plus"
@@ -388,123 +587,124 @@ function stop() {
       </UCard>
     </div>
 
-    <!-- RUNNING / DONE: large live preview takes over; input collapses inline -->
+    <!-- RUNNING / DONE: the cockpit. A viewport-bounded grid so the stage stays
+         fixed while the rail/filmstrip scroll internally instead of the whole
+         page scrolling. Main column = stage (top) + filmstrip (beneath); right
+         column = the agent rail (a slideover on < lg); the command bar is pinned
+         below. On < lg the columns stack (stage → filmstrip → command bar) and
+         the rail moves behind the header "Steps" toggle. -->
     <div
       v-else
-      class="grid lg:grid-cols-5 gap-6 lg:gap-8 max-w-6xl mx-auto"
+      class="max-w-6xl mx-auto flex flex-col gap-4 lg:h-[calc(100vh-13rem)]"
     >
-      <!-- Collapsible input panel (re-opened from the header button) -->
-      <div
-        v-if="setupOpen"
-        class="lg:col-span-2"
-      >
-        <UCard class="lg:sticky lg:top-8">
-          <InputPanel
-            v-model:preview-url="previewUrl"
-            v-model:intent="intent"
-            :samples="samples"
-            :can-run="canRun"
-            :running="running"
-            :error-message="errorMessage"
-            @pick-file="onInputFile"
-            @clear-file="onFileChange(null)"
-            @load-sample="loadSample"
-            @run="run"
-            @stop="stop"
-          />
-        </UCard>
-      </div>
-
-      <!-- Main area: large live preview + supporting timeline -->
-      <div :class="setupOpen ? 'lg:col-span-3 space-y-6' : 'lg:col-span-5 space-y-6'">
-        <!-- Large live preview of the latest frame (final on done) -->
-        <section>
-          <div class="flex items-center justify-between mb-4">
-            <div class="flex items-center gap-2">
-              <h2 class="text-sm font-semibold uppercase tracking-wide text-muted">
-                {{ view === 'done' ? 'Final result' : 'Live preview' }}
-              </h2>
-              <UBadge
-                v-if="running"
-                color="primary"
-                variant="subtle"
-                size="sm"
-                :ui="{ leadingIcon: 'animate-spin' }"
-                icon="i-lucide-loader-circle"
-              >
-                Editing…
-              </UBadge>
-            </div>
-            <UButton
-              v-if="showFinal"
-              icon="i-lucide-download"
-              label="Download"
-              color="primary"
-              variant="subtle"
-              size="sm"
-              :to="finalImageUrl ?? undefined"
-              download="edited.jpg"
+      <div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[1fr_20rem] gap-4">
+        <!-- Main column: stage on top, filmstrip beneath -->
+        <div class="flex flex-col gap-4 min-h-0">
+          <!-- The live stage (fixed; selected frame + working caption). Focusable
+               so ←/→ scrub the filmstrip when the stage has focus. -->
+          <div
+            class="flex-1 min-h-0 min-h-[16rem] focus:outline-none"
+            tabindex="0"
+            @keydown="onStageKeydown"
+          >
+            <EditorStage
+              :image-url="selectedImageUrl"
+              :running="running"
+              :view="view"
+              :active-step="activeStep"
+              :is-result="selectedIsResult"
+              @open="openStageLightbox"
             />
           </div>
 
-          <div class="rounded-xl overflow-hidden ring-1 ring-default bg-elevated">
-            <button
-              v-if="previewImageUrl"
-              type="button"
-              class="block w-full group cursor-zoom-in"
-              :disabled="!effectiveResultStep && !latestImageUrl"
-              aria-label="Open preview full screen"
-              @click="openPreviewLightbox"
-            >
-              <img
-                :src="previewImageUrl"
-                :alt="view === 'done' ? 'Final edited image' : 'Live preview of the latest frame'"
-                class="w-full max-h-[34rem] object-contain"
-              >
-            </button>
-            <div
-              v-else
-              class="flex items-center justify-center h-72 text-muted"
-            >
-              <UIcon
-                name="i-lucide-loader-circle"
-                class="size-6 animate-spin"
+          <!-- Filmstrip: every frame, click to scrub/pin, ⑂ to branch. A
+               "Jump to latest" button clears the pin so auto-follow resumes
+               (one of only two actions that clear `userPinned`). -->
+          <div class="shrink-0 flex items-stretch gap-2">
+            <div class="flex-1 min-w-0">
+              <Filmstrip
+                :frames="filmstripFrames"
+                :selected-step="selectedStep"
+                :result-step="effectiveResultStep"
+                :running="running"
+                @select="selectFrame"
+                @branch="continueFrom"
+                @use-as-result="useAsResult"
               />
             </div>
-          </div>
-        </section>
-
-        <USeparator />
-
-        <!-- Supporting timeline strip -->
-        <section>
-          <div class="flex items-center gap-2 mb-4">
-            <h2 class="text-sm font-semibold uppercase tracking-wide text-muted">
-              Timeline
-            </h2>
-            <UBadge
+            <UButton
+              v-if="userPinned"
+              icon="i-lucide-chevrons-right"
+              label="Jump to latest"
               color="neutral"
               variant="subtle"
               size="sm"
-            >
-              {{ steps.length }} {{ steps.length === 1 ? 'step' : 'steps' }}
-            </UBadge>
-          </div>
-
-          <div class="space-y-3">
-            <TimelineStep
-              v-for="s in steps"
-              :key="s.step"
-              :step="s"
-              :is-result="s.step === effectiveResultStep"
-              @open="openLightbox(s.step, s.imageUrl)"
-              @continue="continueFrom(s.step)"
-              @use-as-result="useAsResult(s.step)"
+              class="shrink-0 self-center"
+              @click="jumpToLatest"
             />
           </div>
-        </section>
+        </div>
+
+        <!-- Right rail (desktop, in-grid): the scrollable agent/history list.
+             Selecting a row pins the cockpit to that frame (drives stage +
+             filmstrip via the shared `selectedStep` + `selectFrame`);
+             branch/result reuse the existing continueFrom/useAsResult actions.
+             Scrolls internally + auto-follows the active row while running.
+             Hidden on < lg (the rail is `hidden lg:flex`); mobile gets the
+             slideover below via the header "Steps" toggle. -->
+        <AgentRail
+          :steps="steps"
+          :selected-step="selectedStep"
+          :active-step="activeStep"
+          :result-step="effectiveResultStep"
+          @select="selectFrame"
+          @continue="continueFrom"
+          @use-as-result="useAsResult"
+        />
       </div>
+
+      <!-- Command bar (pinned below): persistent intent input + Send (Steer while
+           running) + an always-visible Stop. Shares index.vue's `intent` ref with
+           the setup InputPanel, and `fromStep` so its chip can clear the branch
+           point. Send routes through send() — fresh run / refinement / steer. -->
+      <CommandBar
+        ref="commandBar"
+        v-model:intent="intent"
+        v-model:from-step="fromStep"
+        :running="running"
+        :can-run="canRun"
+        :error-message="errorMessage"
+        @send="send"
+        @stop="stop"
+      />
     </div>
+
+    <!-- Mobile rail: the same agent list behind a slideover so < lg isn't a wall
+         of panels (stage + command bar stay visible; "Steps" in the header opens
+         this). The inner AgentRail is `hidden lg:flex`, so we override its
+         visibility within the slideover body with a wrapper. -->
+    <USlideover
+      v-model:open="railOpen"
+      title="Agent steps"
+      side="right"
+    >
+      <template #body>
+        <!-- The inner AgentRail root is `hidden lg:flex` for the desktop grid;
+             inside the slideover we force it visible (!flex beats `hidden`) and
+             full-height so the list scrolls within the drawer. -->
+        <div class="h-full [&>div]:!flex [&>div]:h-full [&>div]:ring-0">
+          <AgentRail
+            :steps="steps"
+            :selected-step="selectedStep"
+            :active-step="activeStep"
+            :result-step="effectiveResultStep"
+            @select="selectFrame"
+            @continue="continueFrom"
+            @use-as-result="useAsResult"
+          />
+        </div>
+      </template>
+    </USlideover>
 
     <!-- Full-screen frame viewer with download + prev/next -->
     <ImageLightbox

@@ -34,7 +34,7 @@ function next() {
   if (hasNext.value) emit('update:index', props.index + 1)
 }
 
-/** Compact "tool · key val" chips for the caption (mirrors TimelineStep). */
+/** Compact "tool · key val" chips for the caption (mirrors the rail's chips). */
 const opChips = computed<string[]>(() => {
   const ops = current.value?.operations
   if (!ops?.length) return []
