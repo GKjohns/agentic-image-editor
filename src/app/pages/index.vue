@@ -3,7 +3,6 @@ import { Chat } from '@ai-sdk/vue'
 import { DefaultChatTransport } from 'ai'
 import type { UIMessage } from 'ai'
 import type { StepEvent } from '#shared/types'
-import type { LightboxFrame } from '~/components/ImageLightbox.vue'
 import type { FilmstripFrame } from '~/components/Filmstrip.vue'
 
 // --- useChat (Vercel AI SDK) -------------------------------------------------
@@ -33,49 +32,14 @@ const chat = new Chat<UIMessage>({
   })
 })
 
-// --- Input state -------------------------------------------------------------
-const file = ref<File | null>(null)
-const previewUrl = ref<string | null>(null)
-const intent = ref('')
+// --- Input state (source image + intent + samples) ---------------------------
+const { file, previewUrl, intent, samples, loadSample, onFileChange, onInputFile, canRun } = useImageInput()
+
 // A run is in flight while the SDK is submitting or streaming.
 const running = computed(() => chat.status === 'submitted' || chat.status === 'streaming')
 // Surface our own session/transport errors plus any SDK stream error.
 const localError = ref<string | null>(null)
 const errorMessage = computed(() => localError.value ?? chat.error?.message ?? null)
-
-function onFileChange(value: File | File[] | null) {
-  const next = Array.isArray(value) ? value[0] ?? null : value
-  if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
-  file.value = next
-  previewUrl.value = next ? URL.createObjectURL(next) : null
-}
-
-function onInputFile(event: Event) {
-  const target = event.target as HTMLInputElement
-  onFileChange(target.files?.[0] ?? null)
-}
-
-// --- Sample images (for users who don't have a photo handy) ------------------
-const samples = [
-  { src: '/samples/flat-and-crooked.jpg', label: 'Flat & crooked' },
-  { src: '/samples/foggy-ocean-horizon.jpg', label: 'Foggy ocean' },
-  { src: '/samples/foggy-rocky-shore.jpg', label: 'Foggy shore' },
-  { src: '/samples/cozy-cafe-warm-cast.jpg', label: 'Warm café' },
-  { src: '/samples/overcast-ocean-horizon.jpg', label: 'Overcast coast' }
-]
-
-async function loadSample(sample: { src: string, label: string }) {
-  const res = await fetch(sample.src)
-  const blob = await res.blob()
-  const name = sample.src.split('/').pop() ?? 'sample.jpg'
-  onFileChange(new File([blob], name, { type: blob.type || 'image/jpeg' }))
-}
-
-onBeforeUnmount(() => {
-  if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
-})
-
-const canRun = computed(() => !!file.value && intent.value.trim().length > 0)
 
 // --- Session + branch state --------------------------------------------------
 // Persist the session id so "continue from here" branch runs reuse the same
@@ -84,41 +48,18 @@ const sessionId = ref<string | null>(null)
 // When set, the next run() branches FROM this step (sent to /api/edit as
 // `fromStep`) and APPENDS to the timeline instead of wiping it.
 const fromStep = ref<number | null>(null)
-// Manual override of which step is the "result" (download target / big preview).
-// null → default = last applied frame.
-const resultStep = ref<number | null>(null)
 
 // --- Timeline (derived from the useChat message stream) ----------------------
-// Every server-emitted `data-step` part lands in `message.parts` (deciding is
-// non-transient — see edit.post.ts Edge 1). The SDK already de-dupes parts by
-// their stable `step-N` id (replacing data in place), but a refinement turn
-// produces a NEW assistant message, so we flatten across ALL messages and keep
-// the last event per step number (later status — applied/done — wins).
-const steps = computed<StepEvent[]>(() => {
-  const byStep = new Map<number, StepEvent>()
-  for (const message of chat.messages) {
-    for (const part of message.parts) {
-      if (part.type === 'data-step') {
-        const event = part.data as StepEvent
-        byStep.set(event.step, event)
-      }
-    }
-  }
-  return [...byStep.values()].sort((a, b) => a.step - b.step)
-})
-
-// All applied frames (have a rendered image), in order.
-const appliedSteps = computed(() => steps.value.filter(s => s.status === 'applied' && s.imageUrl))
-
-// The default result frame = the last applied frame.
-const lastAppliedStep = computed(() => {
-  const a = appliedSteps.value
-  return a.length ? a[a.length - 1]!.step : null
-})
-
-// The effective result step honours a manual `resultStep` override (used by
-// "Use this as result" and "Undo last step"), else the last applied frame.
-const effectiveResultStep = computed(() => resultStep.value ?? lastAppliedStep.value)
+// Owns the step derivation + the "result frame" override (download target).
+const {
+  steps,
+  appliedSteps,
+  lastAppliedStep,
+  resultStep,
+  effectiveResultStep,
+  useAsResult,
+  undoLastStep
+} = useEditTimeline(() => chat.messages)
 
 // --- View state --------------------------------------------------------------
 // 'setup'   → no run yet: input panel is the hero, centered + roomy.
@@ -214,26 +155,19 @@ const commandBar = ref<{ focus: () => void } | null>(null)
 const railOpen = ref(false)
 
 // --- Lightbox ----------------------------------------------------------------
-const lightboxOpen = ref(false)
-const lightboxIndex = ref(0)
-
-// Frames for the lightbox + prev/next paging: original → each applied step.
-const lightboxFrames = computed<LightboxFrame[]>(() => {
-  const frames: LightboxFrame[] = []
-  if (sessionId.value) {
-    frames.push({ imageUrl: `/api/image/${sessionId.value}/original`, label: 'Original' })
-  } else if (previewUrl.value) {
-    frames.push({ imageUrl: previewUrl.value, label: 'Original' })
-  }
-  for (const s of appliedSteps.value) {
-    frames.push({
-      imageUrl: s.imageUrl!,
-      label: `Step ${s.step}`,
-      goal: s.goal,
-      operations: s.operations
-    })
-  }
-  return frames
+// Full-screen frame viewer (original → applied steps). Aliased to the template's
+// existing `lightbox*` / `openStageLightbox` bindings.
+const {
+  open: lightboxOpen,
+  index: lightboxIndex,
+  frames: lightboxFrames,
+  openStage: openStageLightbox
+} = useLightbox({
+  sessionId: () => sessionId.value,
+  previewUrl: () => previewUrl.value,
+  appliedSteps: () => appliedSteps.value,
+  selectedStep: () => selectedStep.value,
+  effectiveResultStep: () => effectiveResultStep.value
 })
 
 // Frames for the filmstrip: the same original → applied-step ordering as the
@@ -251,40 +185,6 @@ const filmstripFrames = computed<FilmstripFrame[]>(() => {
   }
   return frames
 })
-
-/** Strip the `?t=` cache-buster so two URLs for the same frame compare equal. */
-function framePath(url?: string): string {
-  return url ? url.split('?')[0]! : ''
-}
-
-/**
- * Open the lightbox on a given frame. We resolve the index by the IMAGE the
- * thumbnail is actually showing (`imageUrl` path) first, so the modal always
- * matches the clicked thumbnail — this is what makes the terminal `done` card
- * (whose `step` number has no own frame; its image aliases the last applied
- * frame) open the right image instead of silently falling back to Original.
- * The `Step N` / `Original` label is a fallback when no imageUrl is given.
- */
-function openLightbox(step: number | 'original', imageUrl?: string) {
-  let idx = -1
-  if (imageUrl) {
-    const target = framePath(imageUrl)
-    idx = lightboxFrames.value.findIndex(f => framePath(f.imageUrl) === target)
-  }
-  if (idx < 0) {
-    idx = step === 'original'
-      ? lightboxFrames.value.findIndex(f => f.label === 'Original')
-      : lightboxFrames.value.findIndex(f => f.label === `Step ${step}`)
-  }
-  lightboxIndex.value = idx >= 0 ? idx : 0
-  lightboxOpen.value = true
-}
-
-/** Open the lightbox on whatever the stage currently shows (by image path). */
-function openStageLightbox(imageUrl: string | null) {
-  const sel = selectedStep.value
-  openLightbox(sel ?? effectiveResultStep.value ?? 'original', imageUrl ?? undefined)
-}
 
 // --- Cockpit selection actions (Sprint 2) ------------------------------------
 /**
@@ -349,18 +249,7 @@ function continueFrom(step: number) {
   nextTick(() => commandBar.value?.focus())
 }
 
-/** "Use this as result": make `step` the download target / big preview. */
-function useAsResult(step: number) {
-  resultStep.value = step
-}
-
-/** "Undo last step": revert the result to the second-to-last applied frame. */
-function undoLastStep() {
-  const a = appliedSteps.value
-  if (a.length < 2) return
-  resultStep.value = a[a.length - 2]!.step
-}
-
+// `useAsResult` / `undoLastStep` now live in useEditTimeline (result-frame owner).
 const canUndo = computed(() => view.value === 'done' && appliedSteps.value.length >= 2)
 
 /**
