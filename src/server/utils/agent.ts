@@ -66,11 +66,25 @@ const configSchema = z.object({
 
 type ConfigObject = z.infer<typeof configSchema>
 
+/**
+ * One applied step's trace, for the prompt's history block. Carrying the goal +
+ * the compact change summary (not the full config) is what lets the model see
+ * its own trajectory and converge instead of re-deciding statelessly each turn.
+ */
+export interface StepNote {
+  step: number
+  phase: string
+  goal: string
+  changes: string
+}
+
 export interface DecideArgs {
   originalPath: string
   currentPath: string
   intent: string
   currentConfig: DevelopConfig
+  /** Steps already applied in THIS run (oldest first). Empty on the first look. */
+  history?: StepNote[]
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
@@ -287,6 +301,47 @@ export function diffConfig(prev: DevelopConfig, next: DevelopConfig): Operation[
   return ops
 }
 
+/** Round to 3 dp to keep float noise out of the prompt's history lines. */
+function round3(v: number): number {
+  return Math.round(v * 1000) / 1000
+}
+
+/**
+ * Render a step's `diffConfig` operations into one compact line for the history
+ * block, e.g. `exposure(ev=0.8); tone(highlights=-25, shadows=15)`. Generic over
+ * params so new tools format without extra code.
+ */
+export function summarizeOps(ops: Operation[]): string {
+  if (ops.length === 0) {
+    return '(no slider change)'
+  }
+  return ops
+    .map((op) => {
+      const params = Object.entries(op.params)
+        .map(([k, v]) => `${k}=${typeof v === 'number' ? round3(v) : v}`)
+        .join(', ')
+      return params ? `${op.tool}(${params})` : op.tool
+    })
+    .join('; ')
+}
+
+/**
+ * The "what you've already done this run" block. Threading the per-step
+ * trajectory into the prompt is what lets the model notice a runaway (e.g.
+ * brightening every step toward the clamp) and converge, instead of re-deciding
+ * statelessly each turn. Empty history renders nothing.
+ */
+export function historyToText(history: StepNote[], decidingLook: number): string {
+  if (history.length === 0) {
+    return ''
+  }
+  return [
+    `STEPS ALREADY APPLIED THIS RUN (you are now deciding re-look #${decidingLook}):`,
+    ...history.map(h => `- Step ${h.step} [${h.phase}] "${h.goal}" -> ${h.changes}`),
+    'CONVERGENCE CHECK: review the trajectory above. If a slider has been moved the same direction across several steps with shrinking benefit, THAT dimension has converged — stop nudging it (never ramp a slider toward its clamp in tiny increments). That is not a reason to stop the whole edit: turn your attention to a DIFFERENT improvement. Set done:true only once a further refinement pass would add nothing meaningful across all dimensions.'
+  ].join('\n')
+}
+
 /**
  * Deep-ish config equality: epsilon for the numeric sliders, exact for `look`.
  * Used by the loop's converge guard (a config identical to the current one means
@@ -341,7 +396,7 @@ export async function decideConfig(
   args: DecideArgs,
   model: string
 ): Promise<Decision> {
-  const { originalPath, currentPath, intent, currentConfig } = args
+  const { originalPath, currentPath, intent, currentConfig, history = [] } = args
 
   const [originalBuf, currentBuf] = await Promise.all([
     readFile(originalPath),
@@ -385,6 +440,9 @@ export async function decideConfig(
     '',
     configToText(currentConfig),
     '',
+    // History block (empty on the first look) — lets the model see its own
+    // trajectory and converge instead of ratcheting a slider to the clamp.
+    ...(history.length > 0 ? [historyToText(history, history.length + 1), ''] : []),
     'INSTRUCTIONS:',
     '- Look at the CURRENT image (first image). The ORIGINAL is provided as reference (second image).',
     ...(gridBuf
@@ -394,7 +452,8 @@ export async function decideConfig(
     '- State a single `goal` for this step, then return the FULL updated config: copy the sliders that are already right AS-IS (restate their current values), and adjust ONLY what needs changing.',
     '- Every slider field is an ABSOLUTE value, not a delta. The image always re-renders from the original, so you can freely raise OR lower any slider — reducing a value is free and lands exactly where you set it.',
     '- Respect the policy\'s restraint and target magnitudes — prefer small, deliberate moves. A finished edit usually touches 3-5 sliders.',
-    '- When the intent is already satisfied (or further edits would not help), set done:true (the current config is kept as the result).'
+    '- Do NOT quit after a single pass. Once your first edit has rendered, take at least one REFINEMENT pass: look critically at the result and improve the next most impactful thing — a finer tonal or color balance, a small problem you missed on the first read, a tasteful finishing touch. The first pass gets you most of the way; the refinement pass is what makes it good.',
+    '- Set done:true only when a further refinement pass would add nothing meaningful — and not before you have done at least one refinement pass. (When done is true the current config is kept as the result.)'
   ].join('\n')
 
   const content: Array<{ type: 'text', text: string } | { type: 'image', image: Buffer }> = [

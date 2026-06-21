@@ -2,7 +2,8 @@ import { createUIMessageStream, createUIMessageStreamResponse } from 'ai'
 import type { DevelopConfig, StepEvent } from '~~/shared/types'
 import { storage } from '~~/server/utils/storage'
 import { getEngine } from '~~/server/utils/engines'
-import { decideConfig, diffConfig, equalConfig } from '~~/server/utils/agent'
+import { decideConfig, diffConfig, equalConfig, summarizeOps } from '~~/server/utils/agent'
+import type { StepNote } from '~~/server/utils/agent'
 
 interface EditRequestBody {
   id?: string
@@ -115,6 +116,9 @@ export default defineEventHandler(async (event) => {
       // The result frame to fall back to. When branching, the base frame itself is
       // a valid prior result; when starting fresh from original it's 0 (none yet).
       let lastAppliedStep = baseStep === 'original' ? 0 : baseStep
+      // Per-step trace fed back into each decision so the model sees its own
+      // trajectory and converges (fixes the runaway "brighten every step" loop).
+      const history: StepNote[] = []
 
       // `iter` is the re-look iteration (1..MAX_STEPS); `step` is the actual frame
       // number, continued after any existing frames so branches append. The whole
@@ -130,7 +134,8 @@ export default defineEventHandler(async (event) => {
                 originalPath: storage.pathFor(id, 'original'),
                 currentPath,
                 intent,
-                currentConfig
+                currentConfig,
+                history
               },
               model
             )
@@ -179,6 +184,15 @@ export default defineEventHandler(async (event) => {
             lastAppliedStep = step
             editCount++
 
+            const ops = diffConfig(prevConfig, next)
+            // Record this step so the next look sees the running trajectory.
+            history.push({
+              step,
+              phase: decision.phase,
+              goal: decision.goal,
+              changes: summarizeOps(ops)
+            })
+
             emit({
               step,
               status: 'applied',
@@ -187,7 +201,7 @@ export default defineEventHandler(async (event) => {
               imageUrl: `/api/image/${id}/${step}?t=${Date.now()}`,
               assessment: decision.assessment,
               goal: decision.goal,
-              operations: diffConfig(prevConfig, next),
+              operations: ops,
               config: next,
               reason: decision.reason,
               phase: decision.phase
