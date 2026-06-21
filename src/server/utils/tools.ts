@@ -38,6 +38,41 @@ export const tools: Record<ToolName, ToolSpec> = {
       }
     }
   },
+  crop: {
+    description:
+      'Crop for composition: strengthen framing, remove dead space / edge distractions, or set an aspect ratio. Normalized 0..1 of the (post-straighten) frame — left/top is the top-left corner, width/height the fraction kept. Identity is the full frame (left 0, top 0, width 1, height 1). Applied AFTER straighten. Do NOT crop reflexively — only when it serves the intent (e.g. "tighten", "make it square", "remove the distracting edge"). Leave at identity for most edits.',
+    params: {
+      left: {
+        type: 'number',
+        min: 0,
+        max: 1,
+        description: 'Left edge of the keep-rectangle, 0..1 of frame width. 0 = full left. left + width must be <= 1.'
+      },
+      top: {
+        type: 'number',
+        min: 0,
+        max: 1,
+        description: 'Top edge of the keep-rectangle, 0..1 of frame height. 0 = full top. top + height must be <= 1.'
+      },
+      width: {
+        type: 'number',
+        min: 0.1,
+        max: 1,
+        description: 'Width of the keep-rectangle, 0.1..1 of frame width. 1 = full width (no horizontal crop).'
+      },
+      height: {
+        type: 'number',
+        min: 0.1,
+        max: 1,
+        description: 'Height of the keep-rectangle, 0.1..1 of frame height. 1 = full height (no vertical crop).'
+      },
+      aspect: {
+        type: 'string',
+        enum: ['free', 'original', '1:1', '4:5', '3:2', '16:9'],
+        description: 'Optional aspect hint. free = no constraint; original = keep source ratio; or a fixed ratio (1:1 square, 4:5 portrait, 3:2/16:9 landscape). The numeric rectangle is authoritative; this is a hint for the human overlay.'
+      }
+    }
+  },
   exposure: {
     description:
       'Adjust overall brightness in photographic stops (EV). Multiplicative: each stop doubles or halves linear brightness. 0 = no change.',
@@ -227,6 +262,42 @@ export const tools: Record<ToolName, ToolSpec> = {
         min: 0,
         max: 100,
         description: 'Chroma (color speckle) reduction. Safer to push than luminance. 0 = none. 0 = unchanged.'
+      }
+    }
+  },
+  gradFilter: {
+    description:
+      'A single linear graduated (ND) filter — a regional EXPOSURE gradient for skies and horizons (darken a bright sky, lift a dark foreground). It darkens/brightens one side of the frame with a soft feathered transition, leaving the other side untouched. Most edits need NONE — correct the image globally first; reach for this only when one band of the frame (typically the sky) needs different exposure than the rest. gradEnabled 0 = unused (the default).',
+    params: {
+      enabled: {
+        type: 'number',
+        min: 0,
+        max: 1,
+        description: '1 = apply the graduated filter, 0 = unused (the default). Leave at 0 for most edits.'
+      },
+      angle: {
+        type: 'number',
+        min: 0,
+        max: 360,
+        description: 'Gradient direction in degrees. 0 = the effect falls on the TOP of the frame (darken the sky); 180 = the bottom; 90 = the left. Only matters when enabled = 1.'
+      },
+      position: {
+        type: 'number',
+        min: 0,
+        max: 1,
+        description: 'Where the transition line sits across the frame, 0..1. 0.5 = centered. Lower moves the line toward the start of the gradient (toward the top at angle 0), shrinking the affected band. Only matters when enabled = 1.'
+      },
+      feather: {
+        type: 'number',
+        min: 0,
+        max: 100,
+        description: 'Transition softness, 0..100. 0 = a hard edge, ~50 = a smooth natural blend, 100 = very soft. Only matters when enabled = 1.'
+      },
+      exposure: {
+        type: 'number',
+        min: -3,
+        max: 3,
+        description: 'Exposure shift in EV on the masked side. NEGATIVE darkens (darken the sky), positive brightens. 0 = no effect. -1 to -2 EV is a typical sky-darkening pull. Only matters when enabled = 1.'
       }
     }
   },

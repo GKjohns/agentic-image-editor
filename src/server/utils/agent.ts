@@ -4,6 +4,7 @@ import { z } from 'zod'
 import type { Decision, DevelopConfig, LookName, Operation } from '~~/shared/types'
 import { describeTools } from '~~/server/utils/tools'
 import { EDITING_GUIDE } from '~~/server/utils/editing-guide'
+import { gridReference } from '~~/server/utils/pixels'
 
 /**
  * Structured-output schema for one config decision.
@@ -26,6 +27,11 @@ const configSchema = z.object({
     .describe('Which phase this step belongs to.'),
   goal: z.string().describe('One sentence stating what THIS step is trying to accomplish (e.g. "neutralize the cool cast and set the midtone exposure").'),
   straighten: z.number().describe('straighten angleDeg, -45..45 (+ clockwise). ABSOLUTE value (not a delta). 0 = no rotation.'),
+  cropLeft: z.number().describe('crop left edge, 0..1 of frame width. ABSOLUTE value. 0 = no left crop. Keep at 0 unless cropping. cropLeft+cropWidth <= 1.'),
+  cropTop: z.number().describe('crop top edge, 0..1 of frame height. ABSOLUTE value. 0 = no top crop. Keep at 0 unless cropping. cropTop+cropHeight <= 1.'),
+  cropWidth: z.number().describe('crop kept width, 0.1..1 of frame width. ABSOLUTE value. 1 = full width (no horizontal crop). Keep at 1 unless cropping.'),
+  cropHeight: z.number().describe('crop kept height, 0.1..1 of frame height. ABSOLUTE value. 1 = full height (no vertical crop). Keep at 1 unless cropping.'),
+  cropAspect: z.enum(['free', 'original', '1:1', '4:5', '3:2', '16:9']).describe('crop aspect hint. "free" = no constraint (the default). ABSOLUTE value. Only matters when cropping.'),
   exposure: z.number().describe('exposure stops, -3..3 (+ brightens). ABSOLUTE value (not a delta). 0 = unchanged.'),
   highlights: z.number().describe('tone highlights, -100..100 (<0 recovers blown highs). ABSOLUTE value (not a delta). 0 = unchanged.'),
   shadows: z.number().describe('tone shadows, -100..100 (>0 lifts/opens shadows). ABSOLUTE value (not a delta). 0 = unchanged.'),
@@ -50,6 +56,11 @@ const configSchema = z.object({
   dehaze: z.number().describe('dehaze strength, 0..100 (cuts haze/adds clarity). ABSOLUTE value. 0 = unchanged. Use only on genuinely hazy images.'),
   nrLuminance: z.number().describe('denoise luminance, 0..100 (reduces grain). ABSOLUTE value. 0 = unchanged. Use sparingly.'),
   nrChroma: z.number().describe('denoise chroma, 0..100 (reduces color speckle). ABSOLUTE value. 0 = unchanged. Use sparingly.'),
+  gradEnabled: z.number().describe('graduated filter on/off, 0 or 1. 0 = unused (the default — leave 0 for most edits). ABSOLUTE value.'),
+  gradAngle: z.number().describe('graduated filter direction, 0..360 deg (0 = darken/affect the TOP/sky, 180 = bottom, 90 = left). ABSOLUTE value. Only matters when gradEnabled=1.'),
+  gradPosition: z.number().describe('graduated filter transition position, 0..1 (0.5 = centered). ABSOLUTE value. Only matters when gradEnabled=1.'),
+  gradFeather: z.number().describe('graduated filter softness, 0..100 (0 = hard edge, 50 = smooth). ABSOLUTE value. Only matters when gradEnabled=1.'),
+  gradExposure: z.number().describe('graduated filter exposure, -3..3 EV (NEGATIVE darkens the masked side, e.g. darken a bright sky). ABSOLUTE value. 0 = no effect. Only matters when gradEnabled=1.'),
   reason: z.string().describe('Why this config is the right next move (or why the goal is met). One sentence.')
 })
 
@@ -74,8 +85,21 @@ const EPS = 1e-3
  * defensively).
  */
 function clampConfig(raw: ConfigObject): DevelopConfig {
+  // Crop: clamp each edge/extent into range, then enforce that the keep-rectangle
+  // stays inside the frame (left+width<=1, top+height<=1) by shrinking the extent
+  // toward the edge. Guarantees a positive, in-bounds rect the executor can trust.
+  const cropLeft = clamp(raw.cropLeft, 0, 0.9)
+  const cropTop = clamp(raw.cropTop, 0, 0.9)
+  const cropWidth = clamp(raw.cropWidth, 0.1, 1 - cropLeft)
+  const cropHeight = clamp(raw.cropHeight, 0.1, 1 - cropTop)
+
   return {
     straighten: clamp(raw.straighten, -45, 45),
+    cropLeft,
+    cropTop,
+    cropWidth,
+    cropHeight,
+    cropAspect: raw.cropAspect,
     exposure: clamp(raw.exposure, -3, 3),
     highlights: clamp(raw.highlights, -100, 100),
     shadows: clamp(raw.shadows, -100, 100),
@@ -97,7 +121,13 @@ function clampConfig(raw: ConfigObject): DevelopConfig {
     splitBalance: clamp(raw.splitBalance, -100, 100),
     dehaze: clamp(raw.dehaze, 0, 100),
     nrLuminance: clamp(raw.nrLuminance, 0, 100),
-    nrChroma: clamp(raw.nrChroma, 0, 100)
+    nrChroma: clamp(raw.nrChroma, 0, 100),
+    // Graduated filter: enabled snaps to 0/1; geometry + exposure clamp to range.
+    gradEnabled: raw.gradEnabled >= 0.5 ? 1 : 0,
+    gradAngle: clamp(raw.gradAngle, 0, 360),
+    gradPosition: clamp(raw.gradPosition, 0, 1),
+    gradFeather: clamp(raw.gradFeather, 0, 100),
+    gradExposure: clamp(raw.gradExposure, -3, 3)
   }
 }
 
@@ -110,6 +140,11 @@ export function configToText(config: DevelopConfig): string {
   return [
     'CURRENT SETTINGS (the develop config rendered into the image you see):',
     `- straighten: ${config.straighten} (deg, -45..45, 0 = none)`,
+    `- cropLeft: ${config.cropLeft} (0..1, 0 = none)`,
+    `- cropTop: ${config.cropTop} (0..1, 0 = none)`,
+    `- cropWidth: ${config.cropWidth} (0.1..1, 1 = none)`,
+    `- cropHeight: ${config.cropHeight} (0.1..1, 1 = none)`,
+    `- cropAspect: ${config.cropAspect} (free = none)`,
     `- exposure: ${config.exposure} (EV, -3..3, 0 = none)`,
     `- highlights: ${config.highlights} (-100..100, 0 = none)`,
     `- shadows: ${config.shadows} (-100..100, 0 = none)`,
@@ -131,7 +166,12 @@ export function configToText(config: DevelopConfig): string {
     `- splitBalance: ${config.splitBalance} (-100..100, 0 = none)`,
     `- dehaze: ${config.dehaze} (0..100, 0 = none)`,
     `- nrLuminance: ${config.nrLuminance} (0..100, 0 = none)`,
-    `- nrChroma: ${config.nrChroma} (0..100, 0 = none)`
+    `- nrChroma: ${config.nrChroma} (0..100, 0 = none)`,
+    `- gradEnabled: ${config.gradEnabled} (0/1, 0 = off)`,
+    `- gradAngle: ${config.gradAngle} (0..360 deg, 0 = top/sky)`,
+    `- gradPosition: ${config.gradPosition} (0..1, 0.5 = centered)`,
+    `- gradFeather: ${config.gradFeather} (0..100, 50 = smooth)`,
+    `- gradExposure: ${config.gradExposure} (-3..3 EV, <0 darkens, 0 = none)`
   ].join('\n')
 }
 
@@ -148,6 +188,22 @@ export function diffConfig(prev: DevelopConfig, next: DevelopConfig): Operation[
 
   if (numChanged(prev.straighten, next.straighten)) {
     ops.push({ tool: 'straighten', params: { angleDeg: next.straighten } })
+  }
+  if (numChanged(prev.cropLeft, next.cropLeft)
+    || numChanged(prev.cropTop, next.cropTop)
+    || numChanged(prev.cropWidth, next.cropWidth)
+    || numChanged(prev.cropHeight, next.cropHeight)
+    || prev.cropAspect !== next.cropAspect) {
+    ops.push({
+      tool: 'crop',
+      params: {
+        left: next.cropLeft,
+        top: next.cropTop,
+        width: next.cropWidth,
+        height: next.cropHeight,
+        aspect: next.cropAspect
+      }
+    })
   }
   if (numChanged(prev.exposure, next.exposure)) {
     ops.push({ tool: 'exposure', params: { ev: next.exposure } })
@@ -201,6 +257,26 @@ export function diffConfig(prev: DevelopConfig, next: DevelopConfig): Operation[
   if (numChanged(prev.nrLuminance, next.nrLuminance) || numChanged(prev.nrChroma, next.nrChroma)) {
     ops.push({ tool: 'denoise', params: { luma: next.nrLuminance, chroma: next.nrChroma } })
   }
+  // Graduated filter: emit a chip when the filter is active (enabled) and any of
+  // its fields changed, OR when it just toggled off (so the chip shows removal).
+  const gradActive = next.gradEnabled === 1 && next.gradExposure !== 0
+  const gradWasActive = prev.gradEnabled === 1 && prev.gradExposure !== 0
+  const gradChanged = prev.gradEnabled !== next.gradEnabled
+    || numChanged(prev.gradAngle, next.gradAngle)
+    || numChanged(prev.gradPosition, next.gradPosition)
+    || numChanged(prev.gradFeather, next.gradFeather)
+    || numChanged(prev.gradExposure, next.gradExposure)
+  if (gradChanged && (gradActive || gradWasActive)) {
+    ops.push({
+      tool: 'gradFilter',
+      params: {
+        angle: next.gradAngle,
+        position: next.gradPosition,
+        feather: next.gradFeather,
+        exposure: next.gradExposure
+      }
+    })
+  }
   if (numChanged(prev.sharpen, next.sharpen)) {
     ops.push({ tool: 'sharpen', params: { amount: next.sharpen } })
   }
@@ -218,6 +294,11 @@ export function diffConfig(prev: DevelopConfig, next: DevelopConfig): Operation[
  */
 export function equalConfig(a: DevelopConfig, b: DevelopConfig): boolean {
   return !numChanged(a.straighten, b.straighten)
+    && !numChanged(a.cropLeft, b.cropLeft)
+    && !numChanged(a.cropTop, b.cropTop)
+    && !numChanged(a.cropWidth, b.cropWidth)
+    && !numChanged(a.cropHeight, b.cropHeight)
+    && a.cropAspect === b.cropAspect
     && !numChanged(a.exposure, b.exposure)
     && !numChanged(a.highlights, b.highlights)
     && !numChanged(a.shadows, b.shadows)
@@ -240,6 +321,11 @@ export function equalConfig(a: DevelopConfig, b: DevelopConfig): boolean {
     && !numChanged(a.dehaze, b.dehaze)
     && !numChanged(a.nrLuminance, b.nrLuminance)
     && !numChanged(a.nrChroma, b.nrChroma)
+    && a.gradEnabled === b.gradEnabled
+    && !numChanged(a.gradAngle, b.gradAngle)
+    && !numChanged(a.gradPosition, b.gradPosition)
+    && !numChanged(a.gradFeather, b.gradFeather)
+    && !numChanged(a.gradExposure, b.gradExposure)
 }
 
 /**
@@ -262,6 +348,30 @@ export async function decideConfig(
     readFile(currentPath)
   ])
 
+  // Geometry is "active" once a straighten or crop has been applied. Only then do
+  // we attach the rule-of-thirds alignment grid as a THIRD image so the model can
+  // verify level/squareness. The clean current+original stay untouched so the
+  // color/exposure reads are honest (the grid never lands on those).
+  const geometryActive = currentConfig.straighten !== 0
+    || currentConfig.cropLeft !== 0
+    || currentConfig.cropTop !== 0
+    || currentConfig.cropWidth !== 1
+    || currentConfig.cropHeight !== 1
+
+  // Built once so the grid sentence is appended to the prompt only when the grid
+  // image is actually attached (keeps the model's mental model and the content
+  // array in lockstep).
+  let gridBuf: Buffer | null = null
+  if (geometryActive) {
+    try {
+      gridBuf = await gridReference(currentBuf)
+    } catch (err) {
+      // Degrade gracefully to the existing 2-image behavior — never break the loop.
+      console.warn('[agent] gridReference failed; continuing without alignment grid:', err)
+      gridBuf = null
+    }
+  }
+
   const promptText = [
     'You are a seasoned photo editor with taste — opinionated, but you serve the photo, not your ego. You tune a single develop CONFIG — a set of absolute slider values — and the server re-renders the whole image from the original each iteration. You return the FULL config every step. The best edit is invisible: do the least that serves the intent, and stop.',
     '',
@@ -277,12 +387,25 @@ export async function decideConfig(
     '',
     'INSTRUCTIONS:',
     '- Look at the CURRENT image (first image). The ORIGINAL is provided as reference (second image).',
+    ...(gridBuf
+      ? ['- The third image is the current result with a rule-of-thirds ALIGNMENT GRID overlaid — use it ONLY to check that the horizon is level and verticals are true; if the image is still tilted against the gridlines, adjust `straighten` (and re-check after). Do NOT read color or exposure from the gridded image — judge those from the clean first/second images.']
+      : []),
     '- Run the diagnostic read: what is this photo and what does it want (genre + feeling), where should the eye land, and what is the SINGLE biggest problem (geometry, exposure, clipping, color cast, flatness). Fix the worst thing first.',
     '- State a single `goal` for this step, then return the FULL updated config: copy the sliders that are already right AS-IS (restate their current values), and adjust ONLY what needs changing.',
     '- Every slider field is an ABSOLUTE value, not a delta. The image always re-renders from the original, so you can freely raise OR lower any slider — reducing a value is free and lands exactly where you set it.',
     '- Respect the policy\'s restraint and target magnitudes — prefer small, deliberate moves. A finished edit usually touches 3-5 sliders.',
     '- When the intent is already satisfied (or further edits would not help), set done:true (the current config is kept as the result).'
   ].join('\n')
+
+  const content: Array<{ type: 'text', text: string } | { type: 'image', image: Buffer }> = [
+    { type: 'text', text: promptText },
+    { type: 'image', image: currentBuf },
+    { type: 'image', image: originalBuf }
+  ]
+  // Geometry-gated third image: the alignment-grid reference (see above).
+  if (gridBuf) {
+    content.push({ type: 'image', image: gridBuf })
+  }
 
   const { object } = await generateObject({
     model,
@@ -291,11 +414,7 @@ export async function decideConfig(
     messages: [
       {
         role: 'user',
-        content: [
-          { type: 'text', text: promptText },
-          { type: 'image', image: currentBuf },
-          { type: 'image', image: originalBuf }
-        ]
+        content
       }
     ]
   })

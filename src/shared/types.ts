@@ -8,6 +8,7 @@
  */
 export type ToolName
   = | 'straighten' // geometry: rotate + inscribed-rect crop
+    | 'crop' // geometry: crop for composition / aspect (applied after straighten)
     | 'exposure' // tonal: overall brightness in stops
     | 'contrast' // tonal: true sigmoidal S-curve
     | 'tone' // tonal: independent highlight recovery + shadow lift
@@ -17,6 +18,7 @@ export type ToolName
     | 'vibrance' // color: smart saturation that protects already-saturated/skin tones
     | 'splitTone' // creative: hue+sat tint for shadows and highlights independently
     | 'look' // creative: a named parametric grade
+    | 'gradFilter' // regional: a single linear graduated (ND) exposure filter
     | 'dehaze' // finish: cut atmospheric haze, add clarity
     | 'denoise' // finish: luminance + chroma noise reduction
     | 'sharpen' // finish: output sharpening
@@ -40,6 +42,9 @@ export interface Operation {
 /** The five named creative grades a `look` can apply. */
 export type LookName = 'goldenHour' | 'tealOrange' | 'noir' | 'vintageFade' | 'crispClean'
 
+/** Aspect-ratio hint for the crop tool. 'free' = no constraint, 'original' = keep source ratio. */
+export type CropAspect = 'free' | 'original' | '1:1' | '4:5' | '3:2' | '16:9'
+
 /**
  * The full non-destructive develop "preset": one ABSOLUTE value per slider
  * (not a delta). The server renders it from the original in a fixed order every
@@ -47,6 +52,15 @@ export type LookName = 'goldenHour' | 'tealOrange' | 'noir' | 'vintageFade' | 'c
  */
 export interface DevelopConfig {
   straighten: number // angleDeg  -45..45   (0 = none)
+  // Crop (RT `[Crop]` / Sharp `.extract`). Normalized 0..1 of the POST-straighten
+  // frame; applied right after straighten so it composes against the leveled
+  // image. Identity is the full frame: left/top 0, width/height 1. `cropAspect`
+  // is a flat hint enum (schema-safe, like `look`); 'free' = no aspect lock.
+  cropLeft: number // 0..1 (0 = none) left edge
+  cropTop: number // 0..1 (0 = none) top edge
+  cropWidth: number // 0..1 (1 = none) fraction of width kept
+  cropHeight: number // 0..1 (1 = none) fraction of height kept
+  cropAspect: CropAspect // aspect hint ('free' = none)
   exposure: number // ev        -3..3     (0 = none)
   highlights: number // tone      -100..100 (0 = none)
   shadows: number // tone      -100..100 (0 = none)
@@ -78,11 +92,26 @@ export interface DevelopConfig {
   // Noise reduction (RT `[Directional Pyramid Denoising]`). 0..100, 0 = none.
   nrLuminance: number // 0..100 (0 = none) luminance grain
   nrChroma: number // 0..100 (0 = none) color speckle
+  // --- Sprint 3: one linear graduated (ND) filter (RT `[Gradient]`) ---
+  // A SINGLE regional exposure gradient — the marquee "darken the bright sky /
+  // lift the foreground" local edit, layered over the corrected global base.
+  // Flat fixed-slot fields (NO array). `gradEnabled` 0 = off; identity disables
+  // the whole filter so it's a no-op by default.
+  gradEnabled: number // 0/1 (0 = off)
+  gradAngle: number // 0..360 deg gradient direction; 0 = darken the TOP (sky)
+  gradPosition: number // 0..1 where the transition sits across the frame; 0.5 = centered
+  gradFeather: number // 0..100 transition softness; ~50 = a smooth, natural edge
+  gradExposure: number // -3..3 EV; NEGATIVE darkens the masked side (photographer convention)
 }
 
 /** Identity config: every slider at its no-change value. */
 export const DEFAULT_CONFIG: DevelopConfig = {
   straighten: 0,
+  cropLeft: 0,
+  cropTop: 0,
+  cropWidth: 1,
+  cropHeight: 1,
+  cropAspect: 'free',
   exposure: 0,
   highlights: 0,
   shadows: 0,
@@ -104,7 +133,12 @@ export const DEFAULT_CONFIG: DevelopConfig = {
   splitBalance: 0,
   dehaze: 0,
   nrLuminance: 0,
-  nrChroma: 0
+  nrChroma: 0,
+  gradEnabled: 0,
+  gradAngle: 0,
+  gradPosition: 0.5,
+  gradFeather: 50,
+  gradExposure: 0
 }
 
 /**

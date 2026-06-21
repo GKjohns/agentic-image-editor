@@ -9,8 +9,10 @@ import {
   applyTone,
   applyVibrance,
   applyWhiteBalance,
+  blendWithMask,
   buildSigmoidalLut,
-  clamp255
+  clamp255,
+  linearMask
 } from './pixels'
 
 /**
@@ -151,6 +153,7 @@ function applyLook(data: Buffer, channels: number, name: LookName): void {
  *
  * Param conventions (kept in lockstep with `tools.ts`):
  *   straighten  { angleDeg }              rotate then center-crop inscribed rect.
+ *   crop        { left, top, width, height }  normalized 0..1 keep-rect → .extract.
  *   exposure    { ev }                    EV stops, multiplicative gain 2 ** ev.
  *   contrast    { amount }                -1..1 → sigmoidal S-curve LUT.
  *   tone        { highlights, shadows }   -100..100 each, luminance-masked.
@@ -158,6 +161,7 @@ function applyLook(data: Buffer, channels: number, name: LookName): void {
  *   saturation  { amount }                0..2 multiplier via modulate().
  *   vibrance    { amount }                -1..1 smart, sat-aware saturation.
  *   look        { name }                  named parametric creative grade.
+ *   gradFilter  { angle, position, feather, exposure }  linear ND filter via matte.
  *   sharpen     { amount }                0..1 → Sharp native unsharp.
  */
 export class EditExecutor {
@@ -237,6 +241,58 @@ export class EditExecutor {
           .sharpen({ sigma: 0.5 + amount * 1.5, m1: 0, m2: 1 + amount * 2 })
           .jpeg({ quality: 90 })
           .toBuffer()
+      }
+
+      case 'crop': {
+        // Normalized keep-rectangle (0..1 of the POST-straighten frame) → pixels
+        // against THIS input's metadata. Runs after straighten in renderConfig, so
+        // the metadata here is already the leveled frame. Guard against a zero or
+        // out-of-bounds extract (Sharp throws on a non-positive or oversized rect).
+        const left = Math.max(0, Math.min(1, Number(params.left) || 0))
+        const top = Math.max(0, Math.min(1, Number(params.top) || 0))
+        const width = Math.max(0, Math.min(1, Number(params.width)))
+        const height = Math.max(0, Math.min(1, Number(params.height)))
+        const meta = await sharp(inputPath).metadata()
+        const iw = meta.width ?? 0
+        const ih = meta.height ?? 0
+        const px = Math.min(iw - 1, Math.max(0, Math.round(left * iw)))
+        const py = Math.min(ih - 1, Math.max(0, Math.round(top * ih)))
+        const pw = Math.max(1, Math.min(iw - px, Math.round(width * iw)))
+        const ph = Math.max(1, Math.min(ih - py, Math.round(height * ih)))
+        if (iw === 0 || ih === 0 || (px === 0 && py === 0 && pw === iw && ph === ih)) {
+          // Nothing valid to crop (or a full-frame crop) — pass through.
+          return sharp(inputPath).jpeg({ quality: 90 }).toBuffer()
+        }
+        return sharp(inputPath)
+          .extract({ left: px, top: py, width: pw, height: ph })
+          .jpeg({ quality: 90 })
+          .toBuffer()
+      }
+
+      case 'gradFilter': {
+        // One linear graduated (ND) exposure filter. Render the exposure shift on
+        // a FULL copy of the frame, then alpha-blend it over the base through a
+        // linear matte so only the masked side (e.g. the sky) is affected. EV is
+        // multiplicative (2 ** ev); NEGATIVE darkens (matches gradExposure sign).
+        const ev = Number(params.exposure) || 0
+        const angle = Number(params.angle) || 0
+        const position = Number.isFinite(Number(params.position)) ? Number(params.position) : 0.5
+        const feather = Number(params.feather) || 0
+        if (ev === 0) {
+          return sharp(inputPath).jpeg({ quality: 90 }).toBuffer()
+        }
+        const { data, width, height, channels } = await toRaw(inputPath)
+        // Adjusted copy: the same frame at the shifted exposure.
+        const adj = Buffer.from(data)
+        const gain = 2 ** ev
+        for (let i = 0; i < adj.length; i += channels) {
+          adj[i] = clamp255(adj[i]! * gain)
+          adj[i + 1] = clamp255(adj[i + 1]! * gain)
+          adj[i + 2] = clamp255(adj[i + 2]! * gain)
+        }
+        const mask = linearMask(width, height, angle, position, feather)
+        blendWithMask(data, adj, channels, mask)
+        return fromRaw(data, width, height, channels)
       }
 
       case 'straighten': {
@@ -322,8 +378,8 @@ export class EditExecutor {
   /**
    * Render a full develop config FROM the original, every iteration. Builds the
    * ordered `Operation[]` from the config's NON-IDENTITY fields (canonical order:
-   * straighten → exposure → tone → whiteBalance → contrast → vibrance →
-   * saturation → look → sharpen), then chains them via `applyBatch`. This is what
+   * straighten → crop → exposure → tone → whiteBalance → contrast → vibrance →
+   * saturation → look → gradFilter → sharpen), then chains them via `applyBatch`. This is what
    * makes the model non-destructive: "less contrast" re-renders from scratch with
    * a lower contrast, never an inverse op piled on the prior frame.
    *
@@ -335,6 +391,18 @@ export class EditExecutor {
 
     if (config.straighten !== 0) {
       ops.push({ tool: 'straighten', params: { angleDeg: config.straighten } })
+    }
+    // Crop immediately after straighten — geometry first, against the leveled frame.
+    if (config.cropLeft !== 0 || config.cropTop !== 0 || config.cropWidth !== 1 || config.cropHeight !== 1) {
+      ops.push({
+        tool: 'crop',
+        params: {
+          left: config.cropLeft,
+          top: config.cropTop,
+          width: config.cropWidth,
+          height: config.cropHeight
+        }
+      })
     }
     if (config.exposure !== 0) {
       ops.push({ tool: 'exposure', params: { ev: config.exposure } })
@@ -356,6 +424,19 @@ export class EditExecutor {
     }
     if (config.look !== 'none') {
       ops.push({ tool: 'look', params: { name: config.look } })
+    }
+    // Graduated filter: regional polish over the corrected global base — after
+    // all global tonal/color/creative ops, before sharpen. Skip when off.
+    if (config.gradEnabled === 1 && config.gradExposure !== 0) {
+      ops.push({
+        tool: 'gradFilter',
+        params: {
+          angle: config.gradAngle,
+          position: config.gradPosition,
+          feather: config.gradFeather,
+          exposure: config.gradExposure
+        }
+      })
     }
     if (config.sharpen !== 0) {
       ops.push({ tool: 'sharpen', params: { amount: config.sharpen } })

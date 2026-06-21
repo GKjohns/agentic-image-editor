@@ -10,8 +10,31 @@ import { execFile } from 'node:child_process'
 import { mkdtemp, writeFile, readFile, rm, access } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import sharp from 'sharp'
 import type { DevelopEngine, DevelopConfig, LookName } from '~~/shared/types'
 import { configToPp3 } from '~~/server/utils/pp3'
+
+/**
+ * Read the original's pixel dimensions — required by `configToPp3` to emit the
+ * `[Crop]` section in pixels. Only needed when a crop is active; returns
+ * undefined (skipping the crop) if the metadata can't be read.
+ */
+async function readDims(originalPath: string): Promise<{ width: number, height: number } | undefined> {
+  try {
+    const meta = await sharp(originalPath).metadata()
+    if (meta.width && meta.height) {
+      return { width: meta.width, height: meta.height }
+    }
+  } catch {
+    // fall through — crop is skipped without dims
+  }
+  return undefined
+}
+
+/** True when the config asks for a crop (anything but the full frame). */
+function hasCrop(config: DevelopConfig): boolean {
+  return config.cropLeft !== 0 || config.cropTop !== 0 || config.cropWidth !== 1 || config.cropHeight !== 1
+}
 
 /** Resolved path to the committed look base profiles (`src/looks/`). */
 const LOOKS_DIR = resolve(process.cwd(), 'looks')
@@ -74,7 +97,8 @@ export class RtLocalEngine implements DevelopEngine {
     try {
       const deltaPath = join(dir, 'delta.pp3')
       const outputPath = join(dir, 'out.jpg')
-      await writeFile(deltaPath, configToPp3(args.config))
+      const dims = hasCrop(args.config) ? await readDims(args.originalPath) : undefined
+      await writeFile(deltaPath, configToPp3(args.config, dims))
 
       const lookPath = await resolveLookPp3(args.config.look)
       const pp3Paths = lookPath ? [lookPath, deltaPath] : [deltaPath]

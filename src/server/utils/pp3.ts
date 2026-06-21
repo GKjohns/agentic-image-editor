@@ -29,14 +29,31 @@ function normHue(hue: number): number {
   return ((Math.round(hue) % 360) + 360) % 360
 }
 
+/** Whether the crop fields describe anything other than the full frame. */
+function cropIsIdentity(config: DevelopConfig): boolean {
+  return config.cropLeft === 0
+    && config.cropTop === 0
+    && config.cropWidth === 1
+    && config.cropHeight === 1
+}
+
 /**
  * Serialize a `DevelopConfig` to a PARTIAL pp3 string — only the sections whose
  * controls are non-identity. RT fills every other section with neutral defaults
  * (partial-pp3 acceptance is verified). The grouping mirrors the executor's 9-op
  * model: tone = highlights+shadows (both in `[Exposure]`), whiteBalance =
  * temp+tint. An all-identity config returns just the `[Version]` header.
+ *
+ * `dims` (the ORIGINAL image width/height in pixels) is REQUIRED to emit the
+ * `[Crop]` section — RT's crop is in pixels. VERIFIED against the 5.12 binary:
+ * `[Rotation]` keeps the output at the ORIGINAL dimensions (it scales the rotated
+ * content to fit, no wedge), and `[Crop] X/Y/W/H` are in that same original-
+ * dimension coordinate space — so normalized crop → original-pixel crop is correct
+ * even when straighten is active (RT crops the rotation wedge as part of the crop).
+ * When `dims` is omitted and crop is non-identity, the crop is skipped (the caller
+ * is responsible for passing dims whenever crop may be active).
  */
-export function configToPp3(config: DevelopConfig): string {
+export function configToPp3(config: DevelopConfig, dims?: { width: number, height: number }): string {
   const sections: string[] = []
 
   // The `[Version]` header RT writes on every emitted pp3. Harmless to lead with.
@@ -168,11 +185,55 @@ export function configToPp3(config: DevelopConfig): string {
     )
   }
 
+  // --- [Gradient]: one linear graduated (ND) exposure filter -------------------
+  // VERIFIED keys (Sprint 3.0 spike, reference doc §9): `Enabled, Degree, Feather,
+  // Strength, CenterX, CenterY`. The section is `[Gradient]` (NOT `[Graduated
+  // Filter]`, which is silently ignored); casing is `CenterX`/`CenterY`.
+  //   - Degree: -180..180. RT 0 = effect on the TOP half. Our gradAngle (0..360,
+  //     0 = darken top) maps via Degree = ((gradAngle + 180) % 360) - 180.
+  //   - Strength: EV stops, -5..5. RT POSITIVE darkens the targeted side; our
+  //     gradExposure NEGATIVE darkens (photographer convention) → Strength =
+  //     -gradExposure (verified: gradExposure -2 → Strength +2 → sky darkens).
+  //   - Feather: 0..100 directly.
+  //   - CenterX/Y: -100..100 % offset of the transition from frame center along
+  //     the gradient direction. position 0.5 = centered (offset 0); offsetMag =
+  //     (0.5 - gradPosition) * 200, projected onto the gradient axis. At gradAngle
+  //     0 (Degree 0, vertical split) this rides CenterY; the sign is set so a
+  //     lower position pushes the transition toward the top (shrinking the band).
+  // Always emit Enabled=true; skip the whole section when off or no effect.
+  if (config.gradEnabled === 1 && config.gradExposure !== 0) {
+    const degree = clampInt(((config.gradAngle + 180) % 360) - 180, -180, 180)
+    const strength = Number((-config.gradExposure).toFixed(4))
+    const feather = clampInt(config.gradFeather, 0, 100)
+    // Offset magnitude along the gradient axis; rotate by the gradient angle so
+    // the transition moves perpendicular to the gradient line in the general case.
+    const offsetMag = (0.5 - config.gradPosition) * 200
+    const rad = (config.gradAngle * Math.PI) / 180
+    const centerX = clampInt(offsetMag * Math.sin(rad), -100, 100)
+    const centerY = clampInt(offsetMag * Math.cos(rad), -100, 100)
+    sections.push(
+      `[Gradient]\nEnabled=true\nDegree=${degree}\nFeather=${feather}\nStrength=${strength}\nCenterX=${centerX}\nCenterY=${centerY}`
+    )
+  }
+
   // --- [Rotation]: straighten --------------------------------------------------
   // Rotation has no Enabled key. RT auto-crops the wedge when Crop is enabled; we
   // leave crop to RT's default behavior at the current field count.
   if (config.straighten !== 0) {
     sections.push(`[Rotation]\nDegree=${config.straighten}`)
+  }
+
+  // --- [Crop]: composition / aspect crop ---------------------------------------
+  // Verified keys: `Enabled, X, Y, W, H` (pixels). Normalized 0..1 → original-
+  // dimension pixels (see the `dims` note above: RT's rotated output stays at the
+  // original WxH, so crop coords map against the original dims even when straighten
+  // is active). Skip entirely when identity or when dims are unavailable.
+  if (!cropIsIdentity(config) && dims && dims.width > 0 && dims.height > 0) {
+    const x = clampInt(config.cropLeft * dims.width, 0, dims.width - 1)
+    const y = clampInt(config.cropTop * dims.height, 0, dims.height - 1)
+    const w = clampInt(config.cropWidth * dims.width, 1, dims.width - x)
+    const h = clampInt(config.cropHeight * dims.height, 1, dims.height - y)
+    sections.push(`[Crop]\nEnabled=true\nX=${x}\nY=${y}\nW=${w}\nH=${h}`)
   }
 
   return `${sections.join('\n\n')}\n`

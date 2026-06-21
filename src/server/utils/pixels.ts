@@ -5,6 +5,58 @@
 // in place (cheap, no reallocation) and never touch the alpha channel so masks
 // survive. Keep these dependency-free and side-effect-only on the passed buffer.
 
+import sharp from 'sharp'
+
+/**
+ * Composite a rule-of-thirds ALIGNMENT GRID onto a copy of `buf` and return the
+ * gridded JPEG. Used ONLY as an extra reference image for the agent AFTER a
+ * straighten/crop is active, so it can verify the horizon is level and verticals
+ * are true against the gridlines. It is NEVER sent in place of the clean current
+ * image — the clean current+original stay untouched for honest color/exposure
+ * reads (baking a grid onto those would corrupt the color read). This image is
+ * additive and geometry-gated.
+ *
+ * The grid mirrors GridOverlay.vue's theme-aware geometry: 2 vertical lines at
+ * w/3 & 2w/3, 2 horizontal lines at h/3 & 2h/3. Each line is drawn twice — a
+ * thicker semi-transparent dark halo first, then a thinner bright-white line on
+ * top — so it stays legible over both dark and light regions of any photo.
+ */
+export async function gridReference(buf: Buffer): Promise<Buffer> {
+  const meta = await sharp(buf).metadata()
+  const w = meta.width ?? 0
+  const h = meta.height ?? 0
+  if (w === 0 || h === 0) {
+    throw new Error('gridReference: could not read image dimensions')
+  }
+
+  // Stroke scales with image size so the grid reads on small and large frames
+  // alike; the dark halo is wider than the white line riding on top of it.
+  const stroke = Math.max(2, Math.round(Math.min(w, h) / 400))
+  const halo = stroke * 2
+
+  const vx = [Math.round(w / 3), Math.round((2 * w) / 3)]
+  const hy = [Math.round(h / 3), Math.round((2 * h) / 3)]
+
+  const line = (x1: number, y1: number, x2: number, y2: number, color: string, sw: number) =>
+    `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="${sw}" />`
+
+  const draw = (color: string, sw: number) =>
+    [
+      ...vx.map(x => line(x, 0, x, h, color, sw)),
+      ...hy.map(y => line(0, y, w, y, color, sw))
+    ].join('')
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">`
+    + draw('rgba(0,0,0,0.4)', halo)
+    + draw('rgba(255,255,255,0.85)', stroke)
+    + '</svg>'
+
+  return sharp(buf)
+    .composite([{ input: Buffer.from(svg) }])
+    .jpeg({ quality: 90 })
+    .toBuffer()
+}
+
 /** Rec.709 relative luminance from 0..255 channels, returned normalized 0..1. */
 export function luminance(r: number, g: number, b: number): number {
   return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
@@ -233,6 +285,92 @@ export function applyVibrance(data: Buffer, channels: number, amount: number): v
     data[i] = r
     data[i + 1] = g
     data[i + 2] = b
+  }
+}
+
+/**
+ * Build a single-channel (grayscale) alpha matte for a LINEAR graduated filter.
+ *
+ * Returns a `w*h` Uint8ClampedArray of 0..255 weights: 255 = full effect, 0 =
+ * none, with a feathered transition between. Mirrors RT's `[Gradient]` geometry
+ * so the Sharp path matches the RT render:
+ *   - `angle` (0..360 deg): gradient direction. 0 = the effect lands on the TOP
+ *     of the frame (matches gradAngle 0 = darken sky / RT Degree 0).
+ *   - `position` (0..1): where the transition center sits across the frame; 0.5 =
+ *     centered.
+ *   - `feather` (0..100): transition softness. 0 = a hard edge; 100 = a very soft,
+ *     nearly full-frame ramp.
+ *
+ * Geometry: we project each pixel onto the gradient axis (the unit vector along
+ * which the effect falls off), normalize that coordinate to 0..1 across the
+ * frame's projected extent, and smoothstep around the transition center with a
+ * half-width set by the feather. At angle 0 the axis points UP, so the top of
+ * the frame is full effect and the bottom is none.
+ */
+export function linearMask(
+  w: number,
+  h: number,
+  angle: number,
+  position: number,
+  feather: number
+): Uint8ClampedArray {
+  const mask = new Uint8ClampedArray(w * h)
+  const rad = (angle * Math.PI) / 180
+  // Axis pointing toward the affected side. angle 0 → up (negative Y in image
+  // coords, which grow downward), so the top of the frame gets the full effect.
+  const ax = Math.sin(rad)
+  const ay = -Math.cos(rad)
+
+  // Project the four corners (relative to center) onto the axis to find the
+  // frame's extent along it, so `position` spans the whole image regardless of
+  // angle. Center the pixel coordinates on the frame center.
+  const cx = (w - 1) / 2
+  const cy = (h - 1) / 2
+  const halfExtent = (Math.abs(ax) * w + Math.abs(ay) * h) / 2 || 1
+
+  // Feather → half-width of the smoothstep band, as a fraction of the extent.
+  // feather 0 → near-hard edge; 100 → the band spans the full frame.
+  const f = Math.max(0, Math.min(100, feather)) / 100
+  const halfBand = Math.max(0.002, f) // in 0..1 normalized-projection units
+
+  // position 0..1 → the transition center along the axis. position 0.5 = center.
+  // Higher projection = closer to the affected (top, at angle 0) side. We invert
+  // position so a LOWER position moves the transition toward the affected side
+  // (shrinking the affected band), matching the RT CenterY sign convention.
+  const center = 1 - Math.max(0, Math.min(1, position))
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      // Signed projection onto the axis, normalized to roughly 0..1 across frame.
+      const proj = ((x - cx) * ax + (y - cy) * ay) / halfExtent // -1..1
+      const t = (proj + 1) / 2 // 0..1, 1 = affected side
+      // Full effect above (center + halfBand), none below (center - halfBand).
+      const wgt = smoothstep(center - halfBand, center + halfBand, t)
+      mask[y * w + x] = clamp255(Math.round(wgt * 255))
+    }
+  }
+  return mask
+}
+
+/**
+ * Alpha-blend an adjusted RGB buffer over a base RGB buffer using a single-
+ * channel matte, in place on `base`. `out = base*(1-a) + adj*a` per channel,
+ * where `a` is the matte weight (0..255 → 0..1). Both buffers share the same
+ * geometry/`channels`; the matte is one weight per pixel. Alpha is untouched.
+ */
+export function blendWithMask(
+  base: Buffer,
+  adj: Buffer,
+  channels: number,
+  mask: Uint8ClampedArray
+): void {
+  for (let p = 0, i = 0; p < mask.length; p++, i += channels) {
+    const a = mask[p]! / 255
+    if (a <= 0) continue
+    const ia = 1 - a
+    base[i] = clamp255(base[i]! * ia + adj[i]! * a)
+    base[i + 1] = clamp255(base[i + 1]! * ia + adj[i + 1]! * a)
+    base[i + 2] = clamp255(base[i + 2]! * ia + adj[i + 2]! * a)
   }
 }
 

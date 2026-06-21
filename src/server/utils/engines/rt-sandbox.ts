@@ -15,9 +15,15 @@
 
 import { readFile } from 'node:fs/promises'
 import { Sandbox } from '@vercel/sandbox'
+import sharp from 'sharp'
 import type { DevelopEngine, DevelopConfig, LookName } from '~~/shared/types'
 import { configToPp3 } from '~~/server/utils/pp3'
 import { buildRtArgs } from '~~/server/utils/engines/rt-local'
+
+/** Crop active = the keep-rectangle is anything but the full frame. */
+function hasCrop(config: DevelopConfig): boolean {
+  return config.cropLeft !== 0 || config.cropTop !== 0 || config.cropWidth !== 1 || config.cropHeight !== 1
+}
 
 /** In-VM paths the snapshot bakes (must match `scripts/build-rt-snapshot.ts`). */
 const RT_BIN_IN_VM = '/opt/rt/rawtherapee-cli'
@@ -99,7 +105,17 @@ export class RtSandboxEngine implements DevelopEngine {
 
     // Write the agent's delta pp3 for this render (the original + look bases are
     // already in the VM). Look base FIRST, delta LAST — later -p overrides earlier.
-    await sandbox.writeFiles([{ path: DELTA_PATH, content: configToPp3(args.config) }])
+    // Crop needs the original's pixel dims (read locally from the source file —
+    // it's still on the host disk; the VM only ever sees the upload). Skip when
+    // crop is identity to avoid a needless metadata read.
+    let dims: { width: number, height: number } | undefined
+    if (hasCrop(args.config)) {
+      const meta = await sharp(args.originalPath).metadata()
+      if (meta.width && meta.height) {
+        dims = { width: meta.width, height: meta.height }
+      }
+    }
+    await sandbox.writeFiles([{ path: DELTA_PATH, content: configToPp3(args.config, dims) }])
     const lookPath = this.lookPathInVm(args.config.look)
     const pp3Paths = lookPath ? [lookPath, DELTA_PATH] : [DELTA_PATH]
 
