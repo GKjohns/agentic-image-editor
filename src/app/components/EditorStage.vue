@@ -16,6 +16,8 @@ const props = defineProps<{
   activeStep: StepEvent | null
   /** The shown frame is the current download target / result. */
   isResult?: boolean
+  /** Active crop keep-rect (normalized 0..1) for the grid overlay, or null. */
+  crop?: { left: number, top: number, width: number, height: number } | null
 }>()
 
 const emit = defineEmits<{
@@ -34,6 +36,10 @@ const caption = computed(() => {
 
 // On done, a subtle tag in the corner: Result vs (when scrubbed back) Original.
 const resultTag = computed(() => (props.isResult ? 'Result' : 'Original'))
+
+// Rule-of-thirds / crop grid toggle — a human aid for judging level + composition.
+// Off by default so it never clutters the working view; the button flips it.
+const showGrid = ref(false)
 </script>
 
 <template>
@@ -51,6 +57,45 @@ const resultTag = computed(() => (props.isResult ? 'Result' : 'Original'))
         class="w-full h-full object-contain"
       >
     </button>
+
+    <!-- Rule-of-thirds / crop grid overlay (human aid; toggled by the button). -->
+    <GridOverlay
+      :show="showGrid && !!imageUrl"
+      :crop="crop"
+    />
+
+    <!-- Grid toggle: a small monochrome button, top-left while editing/running so
+         it doesn't collide with the done-state Result tag in that same corner. -->
+    <div
+      v-if="imageUrl && view !== 'done'"
+      class="absolute top-3 left-3"
+    >
+      <UButton
+        :icon="showGrid ? 'i-lucide-grid-3x3' : 'i-lucide-grid-2x2'"
+        :label="showGrid ? 'Grid on' : 'Grid'"
+        :color="showGrid ? 'primary' : 'neutral'"
+        variant="subtle"
+        size="sm"
+        :aria-pressed="showGrid"
+        @click.stop="showGrid = !showGrid"
+      />
+    </div>
+    <!-- On done, the Result tag owns the top-left; put the grid toggle top-right
+         (the download sits there only when isResult, so guard against overlap). -->
+    <div
+      v-if="imageUrl && view === 'done' && !isResult"
+      class="absolute top-3 right-3"
+    >
+      <UButton
+        :icon="showGrid ? 'i-lucide-grid-3x3' : 'i-lucide-grid-2x2'"
+        :label="showGrid ? 'Grid on' : 'Grid'"
+        :color="showGrid ? 'primary' : 'neutral'"
+        variant="subtle"
+        size="sm"
+        :aria-pressed="showGrid"
+        @click.stop="showGrid = !showGrid"
+      />
+    </div>
     <div
       v-else
       class="flex items-center justify-center h-full text-muted"

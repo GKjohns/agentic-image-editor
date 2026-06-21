@@ -24,21 +24,25 @@ export function useLightbox(deps: LightboxDeps) {
   const index = ref(0)
 
   // Frames for the viewer + prev/next paging: original → each applied step.
+  // Every non-original frame carries `originalUrl` (its compare-against source for
+  // the before/after slider). The Original frame omits it — the slider hides there.
   const frames = computed<LightboxFrame[]>(() => {
     const out: LightboxFrame[] = []
     const sessionId = deps.sessionId()
     const preview = deps.previewUrl()
-    if (sessionId) {
-      out.push({ imageUrl: `/api/image/${sessionId}/original`, label: 'Original' })
-    } else if (preview) {
-      out.push({ imageUrl: preview, label: 'Original' })
+    const originalUrl = sessionId
+      ? `/api/image/${sessionId}/original`
+      : preview ?? undefined
+    if (originalUrl) {
+      out.push({ imageUrl: originalUrl, label: 'Original', isOriginal: true })
     }
     for (const s of deps.appliedSteps()) {
       out.push({
         imageUrl: s.imageUrl!,
         label: `Step ${s.step}`,
         goal: s.goal,
-        operations: s.operations
+        operations: s.operations,
+        originalUrl
       })
     }
     return out

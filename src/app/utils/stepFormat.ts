@@ -30,6 +30,7 @@ export function phaseColor(phase?: Phase): BadgeColor {
  * 0..N magnitudes/angles. For any param listed here we show the bare number.
  */
 export const unsignedParams: Partial<Record<ToolName, string[]>> = {
+  crop: ['left', 'top', 'width', 'height'],
   saturation: ['amount'],
   sharpen: ['amount'],
   splitTone: ['shHue', 'shSat', 'hiHue', 'hiSat'],

@@ -132,6 +132,29 @@ const selectedIsResult = computed(() => {
   return sel !== null && sel !== 'original' && sel === effectiveResultStep.value
 })
 
+// The develop config of the frame currently on the stage — used to draw the crop
+// rectangle in the grid overlay so the human sees the agent's crop. `null` on the
+// original (no crop applied yet) so the overlay shows the plain thirds grid.
+const selectedConfig = computed(() => {
+  const sel = selectedStep.value
+  if (sel === null || sel === 'original') {
+    // No explicit frame: while running, reflect the latest applied frame's config.
+    if (sel === null && lastAppliedStep.value !== null) {
+      return appliedSteps.value.find(s => s.step === lastAppliedStep.value)?.config ?? null
+    }
+    return null
+  }
+  return appliedSteps.value.find(s => s.step === sel)?.config ?? null
+})
+
+// The crop keep-rectangle (normalized) for the overlay, or null when the frame is
+// uncropped (full frame) — GridOverlay then draws just the thirds grid.
+const selectedCrop = computed(() => {
+  const c = selectedConfig.value
+  if (!c) return null
+  return { left: c.cropLeft, top: c.cropTop, width: c.cropWidth, height: c.cropHeight }
+})
+
 /** Reset back to a fresh setup screen (clears the run + keeps no image). */
 function newImage() {
   stop()
@@ -405,53 +428,56 @@ async function send() {
 </script>
 
 <template>
-  <UContainer class="py-8 sm:py-12">
+  <UContainer class="py-6">
+    <!-- SETUP HEADER: onboarding title + subtitle (setup view only). In the
+         editing view this block is gone — the global UHeader carries the name
+         and a slim in-page toolbar (below) holds the actions. -->
     <div
-      class="mb-8 sm:mb-10 flex items-start justify-between gap-4"
-      :class="view === 'setup' ? 'max-w-3xl mx-auto' : 'max-w-6xl mx-auto'"
+      v-if="view === 'setup'"
+      class="mb-6 max-w-3xl mx-auto"
     >
-      <div>
-        <h1 class="text-2xl sm:text-3xl font-bold text-highlighted">
-          Agentic Image Editor
-        </h1>
-        <p class="mt-2 text-muted">
-          Drop an image, describe the edit, watch an AI agent do it step by step.
-        </p>
-      </div>
+      <h1 class="text-2xl sm:text-3xl font-bold text-highlighted">
+        Agentic Image Editor
+      </h1>
+      <p class="mt-2 text-muted">
+        Drop an image, describe the edit, watch an AI agent do it step by step.
+      </p>
+    </div>
 
-      <!-- Header controls (only once a run has started) -->
-      <div
-        v-if="view !== 'setup'"
-        class="flex items-center gap-2 shrink-0"
-      >
-        <!-- Mobile-only: open the agent rail (hidden in the grid on < lg). -->
-        <UButton
-          icon="i-lucide-list"
-          label="Steps"
-          color="neutral"
-          variant="subtle"
-          size="sm"
-          class="lg:hidden"
-          @click="railOpen = true"
-        />
-        <UButton
-          v-if="canUndo"
-          icon="i-lucide-undo-2"
-          label="Undo last step"
-          color="neutral"
-          variant="subtle"
-          size="sm"
-          @click="undoLastStep"
-        />
-        <UButton
-          icon="i-lucide-image-plus"
-          label="New image"
-          color="neutral"
-          variant="ghost"
-          size="sm"
-          @click="newImage"
-        />
-      </div>
+    <!-- EDITING TOOLBAR: a slim single-line action row directly above the grid
+         (replaces the old in-page header). Compact, shrink-0, right-aligned;
+         shown only once a run has started. -->
+    <div
+      v-else
+      class="mb-3 max-w-6xl mx-auto flex items-center justify-end gap-2 shrink-0"
+    >
+      <!-- Mobile-only: open the agent rail (hidden in the grid on < lg). -->
+      <UButton
+        icon="i-lucide-list"
+        label="Steps"
+        color="neutral"
+        variant="subtle"
+        size="sm"
+        class="lg:hidden"
+        @click="railOpen = true"
+      />
+      <UButton
+        v-if="canUndo"
+        icon="i-lucide-undo-2"
+        label="Undo last step"
+        color="neutral"
+        variant="subtle"
+        size="sm"
+        @click="undoLastStep"
+      />
+      <UButton
+        icon="i-lucide-image-plus"
+        label="New image"
+        color="neutral"
+        variant="ghost"
+        size="sm"
+        @click="newImage"
+      />
     </div>
 
     <!-- SETUP: input panel is the hero, centered + roomy -->
@@ -484,7 +510,7 @@ async function send() {
          the rail moves behind the header "Steps" toggle. -->
     <div
       v-else
-      class="max-w-6xl mx-auto flex flex-col gap-4 lg:h-[calc(100vh-13rem)]"
+      class="max-w-6xl mx-auto flex flex-col gap-4 lg:h-[calc(100vh-13.5rem)]"
     >
       <div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[1fr_20rem] gap-4">
         <!-- Main column: stage on top, filmstrip beneath -->
@@ -502,6 +528,7 @@ async function send() {
               :view="view"
               :active-step="activeStep"
               :is-result="selectedIsResult"
+              :crop="selectedCrop"
               @open="openStageLightbox"
             />
           </div>

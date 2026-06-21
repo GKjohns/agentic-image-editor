@@ -40,13 +40,19 @@ useSeoMeta({
       </template>
     </UHeader>
 
-    <UMain>
+    <!-- UMain's default min-height is `100vh - header`, which alone fills the
+         viewport and pushes the separator + footer below the fold (a guaranteed
+         page scroll). Subtract the footer chrome too so the editing cockpit +
+         footer fit in a single viewport with no scroll. -->
+    <UMain class="min-h-[calc(100vh-var(--ui-header-height)-2.5rem)]">
       <NuxtPage />
     </UMain>
 
     <USeparator />
 
-    <UFooter>
+    <!-- Condensed footer (py-2) so it costs the layout as little height as
+         possible — the editing view is viewport-bounded. -->
+    <UFooter :ui="{ container: 'py-2 lg:py-2' }">
       <template #left>
         <p class="text-sm text-muted">
           Agentic Image Editor • © {{ new Date().getFullYear() }}
