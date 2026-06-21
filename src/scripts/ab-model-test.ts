@@ -24,9 +24,9 @@ interface Case { image: string, intent: string }
 
 // Scenarios chosen to exercise judgment: geometry+flat, color-cast correction, haze+mood.
 const CASES: Case[] = [
-  { image: 'public/samples/flat-and-crooked.jpg', intent: 'fix it up and make it pop' },
-  { image: 'public/samples/cozy-cafe-warm-cast.jpg', intent: 'make it look natural and inviting' },
-  { image: 'public/samples/foggy-rocky-shore.jpg', intent: 'make it dramatic and moody' }
+  { image: 'public/samples/swirl-mural-portrait.jpg', intent: 'fix it up and make it pop' },
+  { image: 'public/samples/strawberry-cake.jpg', intent: 'make it look natural and inviting' },
+  { image: 'public/samples/granite-dome-vista.jpg', intent: 'make it dramatic and moody' }
 ]
 
 const MODELS = (process.env.AB_MODELS || 'anthropic/claude-sonnet-4.6,anthropic/claude-opus-4.8')

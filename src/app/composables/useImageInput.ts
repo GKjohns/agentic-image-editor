@@ -22,12 +22,23 @@ export function useImageInput() {
   }
 
   // Sample images for users who don't have a photo handy.
+  // Real unedited shots straight off the camera — known-good frames whose
+  // graded versions exist, so each still has obvious global work to do.
   const samples = [
-    { src: '/samples/flat-and-crooked.jpg', label: 'Flat & crooked' },
-    { src: '/samples/foggy-ocean-horizon.jpg', label: 'Foggy ocean' },
-    { src: '/samples/foggy-rocky-shore.jpg', label: 'Foggy shore' },
-    { src: '/samples/cozy-cafe-warm-cast.jpg', label: 'Warm café' },
-    { src: '/samples/overcast-ocean-horizon.jpg', label: 'Overcast coast' }
+    { src: '/samples/rooftop-bomber-skyline.jpg', label: 'Rooftop skyline' },
+    { src: '/samples/swirl-mural-portrait.jpg', label: 'Mural portrait' },
+    { src: '/samples/hill-country-hiker.jpg', label: 'Hill-country hike' },
+    { src: '/samples/neon-arcade-pose.jpg', label: 'Neon arcade' },
+    { src: '/samples/granite-dome-vista.jpg', label: 'Granite dome' },
+    { src: '/samples/austin-skyline-mural.jpg', label: 'Skyline mural' },
+    { src: '/samples/south-congress-street.jpg', label: 'Street scene' },
+    { src: '/samples/south-congress-skyline.jpg', label: 'Avenue skyline' },
+    { src: '/samples/pedestrian-bridge.jpg', label: 'Pedestrian bridge' },
+    { src: '/samples/glass-steel-station.jpg', label: 'Train station' },
+    { src: '/samples/museum-gallery-wall.jpg', label: 'Gallery wall' },
+    { src: '/samples/potted-cactus.jpg', label: 'Potted cactus' },
+    { src: '/samples/strawberry-cake.jpg', label: 'Strawberry cake' },
+    { src: '/samples/henna-application.jpg', label: 'Henna' }
   ]
 
   async function loadSample(sample: { src: string, label: string }) {
