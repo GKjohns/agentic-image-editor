@@ -47,10 +47,13 @@ export class LocalStorageAdapter {
 
   /**
    * Write the uploaded image as `original.jpg`, normalizing to JPEG via sharp so
-   * every downstream step reads a uniform format.
+   * every downstream step reads a uniform format. `.rotate()` (with no args)
+   * bakes any EXIF orientation into the pixels and clears the tag — without it,
+   * sharp keeps the camera-native pixels but drops the orientation metadata, so
+   * phone photos come out rotated 90° from what the browser preview showed.
    */
   async writeOriginal(id: string, buffer: Buffer): Promise<void> {
-    const jpg = await sharp(buffer).jpeg({ quality: 90 }).toBuffer()
+    const jpg = await sharp(buffer).rotate().jpeg({ quality: 90 }).toBuffer()
     await writeFile(this.pathFor(id, 'original'), jpg)
   }
 
