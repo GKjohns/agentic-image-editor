@@ -8,6 +8,9 @@
 # Session working data (intermediates written by the edit executor)
 .data/
 
+# Playwright MCP session artifacts (verification scratch)
+.playwright-mcp/
+
 # Env
 .env
 .env.*

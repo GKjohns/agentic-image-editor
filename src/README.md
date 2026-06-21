@@ -49,7 +49,11 @@ Browser (app/pages/index.vue)
 ```
 
 The loop is **manual** (not the AI SDK auto tool-roundtrip) so the model sees *new pixels*
-each iteration — that's what makes it self-correcting. Decisions stream over the AI SDK
+each iteration — that's what makes it self-correcting. Once geometry is active (a straighten
+or crop has been applied), `decideConfig` attaches a **third reference image — the current
+result with a rule-of-thirds alignment grid overlaid** (`gridReference()` in `server/utils/pixels.ts`)
+— so the agent can verify the horizon is level / verticals are true. The clean current+original
+images are left ungridded, so color/exposure reads stay honest. Decisions stream over the AI SDK
 UI-message stream (`createUIMessageStream` + custom `data-step` parts) and the client
 consumes them with a plain `fetch` + SSE reader. Each `data-step` part carries
 `{ goal, operations[], config }` — the pass's stated sub-goal, the sliders it *changed*
@@ -75,6 +79,7 @@ which also keeps the future Vercel Sandbox path clean. Pure helpers live in `ser
 | Phase | Tool | Params | Range | Effect |
 |-------|------|--------|-------|--------|
 | straighten | `straighten` | `angleDeg` | −45..45 | rotate + center-crop largest inscribed rect |
+| straighten | `crop` | `left`/`top`/`width`/`height` (+`aspect`) | 0..1 (w/h 0.1..1) | composition / aspect crop — normalized keep-rect on the post-straighten frame (RT `[Crop]` / Sharp `.extract`) |
 | exposure | `exposure` | `ev` | −3..3 | brightness in stops (`.linear(2**ev, 0)`) |
 | exposure | `contrast` | `amount` | −1..1 | **true sigmoidal** S-curve via a 256-LUT (inverse curve flattens) |
 | tone | `tone` | `highlights`, `shadows` | each −100..100 | luminance-masked highlight recovery + shadow lift |
@@ -100,7 +105,7 @@ on top of the `MAX_STEPS` cap.
 
 ## Deferred (see `internal_docs/`)
 
-`crop` / `hueShift` / `toneCurve` (arbitrary control-point curves); `retouch` (needs a
-detection/inpainting pipeline — explicit non-goal); a final side-by-side confirmation pass;
-Vercel Sandbox executor swap; auth / DB / routing / multi-image. Full spec + implementation
-plan live in `../internal_docs/`.
+`hueShift` / arbitrary control-point `toneCurve`; regional masks beyond a single linear
+graduated filter (radial, per-region color, brush/AI-subject); `retouch` (needs a
+detection/inpainting pipeline — explicit non-goal); auth / DB / routing / multi-image. Full
+spec + implementation plan live in `../internal_docs/`.

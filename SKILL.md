@@ -2,7 +2,7 @@
 name: photo-editing-process
 description: >
   The real operator know-how for getting a good edit out of the Agentic Image Editor's
-  global-only toolset (straighten, exposure, tone, toneCurve, whiteBalance, contrast,
+  toolset (straighten, crop, exposure, tone, toneCurve, whiteBalance, contrast,
   vibrance, saturation, splitTone, dehaze, denoise, look, sharpen). The taste and
   judgment a working editor has internalized: how to read an image, genre-aware
   sensibility, the opinionated-but-collaborative stance, order of operations, target
@@ -18,8 +18,10 @@ per global slider (the same toolset, as a "preset"). Each iteration it **looks a
 rendered result**, returns the full updated config, and the server **re-renders the whole
 ordered stack from the original**. Nothing is baked: any slider can move up or down freely
 with no compounding, so "a touch less contrast" is literally a smaller contrast value, not
-an inverse op piled on top. No local masking, no healing, no crop-to-aspect — every slider
-affects the whole frame. That constraint is the whole game: the discipline is *restraint*,
+an inverse op piled on top. Geometry (straighten + crop) reframes the image; every tonal/
+color slider affects the whole frame. The ONE local tool is a single linear graduated
+(ND) filter (`gradFilter`) for skies/horizons — there is no brush, no healing, no
+per-region color. That constraint is the whole game: the discipline is *restraint*,
 because you can't paint a fix into one corner.
 
 The single most important thing: **a good edit is 3-5 deliberate moves, not 8 fiddly
@@ -52,6 +54,7 @@ what the photo needs, doing the least that achieves it, and stopping. Hold these
 | Op | Param(s) & range | What it does |
 |----|------------------|--------------|
 | `straighten` | `angleDeg` −45..45 (+ = clockwise) | rotate + auto-crop the borders |
+| `crop` | `left`/`top` 0..1, `width`/`height` 0.1..1, `aspect` enum | composition / aspect crop, normalized keep-rect on the post-straighten frame (identity 0,0,1,1) |
 | `exposure` | `ev` −3..3 stops | overall brightness (midtone anchor) |
 | `contrast` | `amount` −1..1 | true sigmoidal S-curve about mid-gray |
 | `tone` | `highlights` −100..100, `shadows` −100..100 | highlights<0 recovers blown highs; shadows>0 lifts/opens shadows. Independent, luminance-masked |
@@ -59,6 +62,7 @@ what the photo needs, doing the least that achieves it, and stopping. Hold these
 | `saturation` | `amount` 0..2 (1 = none) | global, blunt color scaler |
 | `vibrance` | `amount` −1..1 | smart saturation; protects skin & already-vivid colors |
 | `look` | `name` | named grade: goldenHour, tealOrange, noir, vintageFade, crispClean |
+| `gradFilter` | `enabled` 0/1, `angle` 0..360, `position` 0..1, `feather` 0..100, `exposure` −3..3 EV | one linear graduated (ND) filter — darken the sky / lift the foreground. angle 0 = top/sky; exposure<0 darkens. enabled 0 = unused (the default) |
 | `sharpen` | `amount` 0..1 | output sharpening — a finishing step |
 
 ## Read the image BEFORE you touch it
@@ -125,13 +129,22 @@ The load-bearing splits, in one line each:
 ## Order of operations (and *why* each precedes the next)
 
 ```
-straighten → exposure → tone → whiteBalance → contrast → vibrance (→ saturation) → look → sharpen
+straighten → crop → exposure → tone → whiteBalance → contrast → vibrance (→ saturation) → look → gradFilter → sharpen
 ```
 
 This is not arbitrary. Each step makes the *next* judgment readable:
 
-- **straighten first** — `straighten` auto-crops the rotation borders, changing the
-  frame. Settle composition before you spend moves tuning pixels you might crop away.
+- **straighten first, then crop** — both are geometry. `straighten` auto-crops the
+  rotation borders and `crop` is normalized to the post-straighten frame, so level the
+  image *then* compose the crop. Settle the frame before you spend moves tuning pixels you
+  might crop away. Align straighten to the **true horizon**, a **building vertical** (wall
+  edge, door frame, window mullion, lamppost), or a strong horizontal; prefer small angles
+  (most tilts are 1–3°). Once a straighten or crop is applied, the agent is handed a **third
+  reference image — the current result with a rule-of-thirds alignment grid overlaid** — to
+  confirm the horizon is level / verticals are square and refine if not (color/exposure are
+  still judged from the clean images, so the grid never pollutes those reads). **Crop is for composition, not correction** — tighten on the
+  subject, cut dead space / an edge distraction, or set an aspect (1:1, 4:5, 3:2, 16:9).
+  Don't crop reflexively; most edits keep the full frame (identity `0,0,1,1`).
 - **exposure second** — set the **midtone anchor** before shaping the ends. If the whole
   image is a stop dark, every other read (shadow detail, cast, contrast) is wrong.
   Exposure is the foundation; build on it.
@@ -241,6 +254,9 @@ real goal wants more.
 
 | User says | Do this | Not this |
 |-----------|---------|----------|
+| "tighten" / "crop in" / "too much dead space" | `crop` a smaller keep-rect around the subject | leave the frame and just darken edges |
+| "make it square" / "for instagram" | `crop` to 1:1 (centered square) | stretch / squish |
+| "straighten" / "it's crooked" | `straighten` to the true horizon / verticals (small angle) | crop the tilt away |
 | "warm it up" | `whiteBalance` temp+ (stop before skin goes orange) | saturation |
 | "make it pop" | a true black **and** clean white + `contrast` +0.2 + `vibrance` +0.3, maybe a little `sharpen` | crank saturation |
 | "fix the lighting" | `exposure`, then `tone` | contrast / a creative look |

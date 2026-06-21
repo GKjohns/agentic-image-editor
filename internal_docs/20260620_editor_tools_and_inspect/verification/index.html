@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Editor Tools &amp; Inspect — Verification</title>
+<style>
+  :root {
+    --fg: #1a1a1a;
+    --muted: #5c5c5c;
+    --dim: #888;
+    --line: #e2e2e2;
+    --bg: #fafafa;
+    --card: #ffffff;
+    --accent: #1a7f4b;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    line-height: 1.6;
+    margin: 0;
+    padding: 0 20px;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 56px 0 96px; }
+  header.page { border-bottom: 1px solid var(--line); padding-bottom: 28px; margin-bottom: 40px; }
+  h1 { font-size: 30px; font-weight: 650; letter-spacing: -0.02em; margin: 0 0 6px; }
+  .created { color: var(--dim); font-size: 14px; margin: 0 0 18px; }
+  .lede { color: var(--muted); font-size: 16px; max-width: 760px; margin: 0; }
+  h2 {
+    font-size: 21px; font-weight: 600; letter-spacing: -0.01em;
+    margin: 52px 0 4px; padding-top: 14px;
+  }
+  .goal { color: var(--muted); font-style: italic; margin: 0 0 18px; font-size: 15px; }
+  h3 { font-size: 15px; font-weight: 600; margin: 30px 0 10px; color: var(--fg); text-transform: uppercase; letter-spacing: 0.04em; }
+  p { margin: 0 0 14px; }
+  ul { margin: 0 0 16px; padding-left: 22px; }
+  li { margin-bottom: 6px; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.88em; background: #f0f0f0; padding: 1px 5px; border-radius: 4px;
+  }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0 22px; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+  th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .ok { color: var(--accent); font-weight: 600; }
+  figure {
+    margin: 22px 0; padding: 0; background: var(--card);
+    border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+  }
+  figure img { display: block; max-width: 100%; height: auto; }
+  figcaption {
+    font-size: 13.5px; color: var(--muted); padding: 12px 16px;
+    border-top: 1px solid var(--line); background: #fcfcfc;
+  }
+  figcaption b { color: var(--fg); font-weight: 600; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 22px 0; }
+  .pair figure { margin: 0; }
+  .spike { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 4px 20px 14px; margin: 22px 0; }
+  .spike-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-top: 8px; }
+  .spike-grid figure { margin: 0; border-radius: 8px; }
+  .spike-grid figcaption { font-size: 12.5px; padding: 9px 12px; }
+  .note {
+    background: #f4f7f9; border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0;
+    padding: 14px 18px; margin: 22px 0; font-size: 15px; color: var(--muted);
+  }
+  .note b { color: var(--fg); }
+  footer.page { margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--dim); font-size: 13px; }
+  @media (max-width: 640px) {
+    .pair, .spike-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="page">
+  <h1>Editor Tools &amp; Inspect — Verification</h1>
+  <p class="created">Created June 20, 2026 &middot; Agentic Image Editor</p>
+  <p class="lede">
+    A four-sprint push to close three rough edges in the editor. We reclaimed the header's vertical
+    space so the cockpit fits the viewport without scrolling; gave the agent a native RawTherapee
+    <code>crop</code> tool plus a rule-of-thirds straightening grid; shipped one linear graduated (ND)
+    filter for the marquee darken-sky / lift-foreground local edit; and turned the static lightbox into
+    a real inspection surface with zoom/pan and before/after compare. Every backend tool was verified
+    against the live RawTherapee 5.12 binary, not assumed.
+  </p>
+</header>
+
+<h2>At a glance</h2>
+<table>
+  <thead>
+    <tr><th>Sprint</th><th>Scope</th><th>Status</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>1</td><td>Reclaim the header / slim the cockpit</td><td class="ok">Complete</td></tr>
+    <tr><td>2</td><td>Crop tool + straightening grid</td><td class="ok">Complete</td></tr>
+    <tr><td>3</td><td>One linear graduated filter</td><td class="ok">Complete</td></tr>
+    <tr><td>4</td><td>Lightbox zoom/pan + before/after compare</td><td class="ok">Complete</td></tr>
+  </tbody>
+</table>
+<p style="font-size:14px; color:var(--muted);">
+  <code>typecheck</code> clean &middot; <code>lint</code> clean (one known pre-existing
+  <code>max-statements-per-line</code> error in <code>ab-model-test.ts</code>, an untouched file — no new
+  errors introduced) &middot; no commit, no push (per request).
+</p>
+
+<!-- ========================= SPRINT 1 ========================= -->
+<h2>Sprint 1 — Reclaim the header</h2>
+<p class="goal">Goal: the editing view fits the viewport without scrolling; the setup view stays welcoming but tighter.</p>
+<p>
+  Removed the redundant in-page <code>&lt;h1&gt;</code> + subtitle in the editing view (the global
+  <code>UHeader</code> already carries the product name) and relocated Undo / New image / mobile Steps
+  into a slim right-aligned toolbar above the grid. Tightened the setup hero padding. The real scroll
+  culprit turned out to be Nuxt UI's <code>UMain</code> min-height filling the viewport below the header
+  and pushing the footer below the fold — fixed by subtracting the footer chrome from
+  <code>UMain</code>'s min-height and condensing the <code>UFooter</code>.
+</p>
+
+<figure>
+  <img src="screenshots/sprint1_editing_1080p.png" style="max-width:100%;" alt="Editing view at 1080p">
+  <figcaption><b>Zero page scroll at 1920×1080.</b> Measured <code>scrollHeight − innerHeight = 0</code> — stage, filmstrip, and command bar all fit inside the reduced <code>UMain</code> with no overflow.</figcaption>
+</figure>
+
+<figure>
+  <img src="screenshots/sprint1_editing_1440x800.png" style="max-width:100%;" alt="Editing view at 1440x800">
+  <figcaption><b>Zero page scroll at 1440×800.</b> The short-laptop case — the original failure mode. Proves the recomputed grid height (<code>calc(100vh − 13.5rem)</code>) holds on the tightest realistic viewport.</figcaption>
+</figure>
+
+<div class="pair">
+  <figure>
+    <img src="screenshots/sprint1_editing_light.png" style="max-width:100%;" alt="Editing view light">
+    <figcaption><b>Slim toolbar, light.</b> The single-row toolbar replaces the removed header — Undo / New image grouped right, no duplicated title.</figcaption>
+  </figure>
+  <figure>
+    <img src="screenshots/sprint1_editing_dark.png" style="max-width:100%;" alt="Editing view dark">
+    <figcaption><b>Slim toolbar, dark.</b> Same layout, semantic tokens render correctly in dark mode.</figcaption>
+  </figure>
+</div>
+
+<div class="pair">
+  <figure>
+    <img src="screenshots/sprint1_setup_light.png" style="max-width:100%;" alt="Setup view light">
+    <figcaption><b>Tightened setup hero, light.</b> Onboarding title/subtitle kept but condensed (<code>py-6</code>, <code>mb-6</code>) — still a clean hero, less wasted band.</figcaption>
+  </figure>
+  <figure>
+    <img src="screenshots/sprint1_setup_dark.png" style="max-width:100%;" alt="Setup view dark">
+    <figcaption><b>Tightened setup hero, dark.</b> Dark-mode parity for the setup landing.</figcaption>
+  </figure>
+</div>
+
+<figure>
+  <img src="screenshots/sprint1_mobile_steps.png" style="max-width:100%;" alt="Mobile steps slideover">
+  <figcaption><b>Mobile Steps slideover.</b> The relocated mobile "Steps" toggle opens the slideover; the toolbar only renders when <code>view !== 'setup'</code>.</figcaption>
+</figure>
+
+<!-- ========================= SPRINT 2 ========================= -->
+<h2>Sprint 2 — Crop tool + straightening grid</h2>
+<p class="goal">Goal: the agent can crop for composition/aspect via native RT <code>[Crop]</code>, with a rule-of-thirds overlay for the human and stronger straighten guidance.</p>
+<p>
+  Added flat crop fields (<code>cropLeft/Top/Width/Height</code> + <code>cropAspect</code> enum) through the
+  full backend chain — <code>types.ts</code> → <code>tools.ts</code> → <code>agent.ts</code> →
+  <code>pp3.ts</code> (RT <code>[Crop]</code>) → <code>executor.ts</code> (Sharp parity) → docs. Added a
+  new presentational <code>GridOverlay.vue</code> (thirds + crop rect) wired into the stage. Crop
+  correctness was proven on the real <code>rawtherapee-cli</code> 5.12 binary, not just the dev Sharp path.
+</p>
+
+<div class="pair">
+  <figure>
+    <img src="screenshots/sprint2_rt_crop_before.png" style="max-width:100%;" alt="RT crop source">
+    <figcaption><b>RT crop — source.</b> 1600×1067 original fed to the actual binary.</figcaption>
+  </figure>
+  <figure>
+    <img src="screenshots/sprint2_rt_crop_render.png" style="max-width:100%;" alt="RT crop rendered">
+    <figcaption><b>RT crop — byte-exact result.</b> <code>[Crop] Enabled,X,Y,W,H</code> rendered to an exact 800×533; the section round-trips byte-exact in the expanded pp3.</figcaption>
+  </figure>
+</div>
+
+<figure>
+  <img src="screenshots/sprint2_tilted_crop.png" style="max-width:100%;" alt="Tilted crop, no wedge">
+  <figcaption><b>Tilt + crop, no black wedge.</b> <code>[Rotation] Degree=3</code> + crop renders an exact 960×640 with no rotation-wedge artifact — proving crop is computed against the original dims (RT scales rotated content to fit; no separate rotated-dim math needed).</figcaption>
+</figure>
+
+<div class="pair">
+  <figure>
+    <img src="screenshots/sprint2_crop_before.png" style="max-width:100%;" alt="Crop before in app">
+    <figcaption><b>Live agent — before.</b> The pre-crop frame on intent "tighten the composition and make it square."</figcaption>
+  </figure>
+  <figure>
+    <img src="screenshots/sprint2_crop_after.png" style="max-width:100%;" alt="Crop after in app">
+    <figcaption><b>Live agent — after.</b> The agent emitted a real <code>crop</code> op (chip: <code>left 0 · top +0.04 · width +1 · height +0.67 · aspect 1:1</code>) → a visibly cropped 1:1 square, no schema repetition loop.</figcaption>
+  </figure>
+</div>
+
+<figure>
+  <img src="screenshots/sprint2_crop_result_rendered.png" style="max-width:100%;" alt="Cropped result rendered">
+  <figcaption><b>Rendered 1:1 result.</b> The applied crop step rendered to a square frame in the running app — emission + Sharp parity confirmed end-to-end.</figcaption>
+</figure>
+
+<div class="pair">
+  <figure>
+    <img src="screenshots/sprint2_grid_overlay_light.png" style="max-width:100%;" alt="Grid overlay light">
+    <figcaption><b>Rule-of-thirds + crop rect, light.</b> The overlay's thirds grid and dimmed crop margins match the applied 1:1 crop.</figcaption>
+  </figure>
+  <figure>
+    <img src="screenshots/sprint2_grid_overlay_dark.png" style="max-width:100%;" alt="Grid overlay dark">
+    <figcaption><b>Rule-of-thirds + crop rect, dark.</b> Theme-aware semi-transparent lines stay legible against the dark stage.</figcaption>
+  </figure>
+</div>
+
+<!-- ========================= SPRINT 3 ========================= -->
+<h2>Sprint 3 — One linear graduated filter</h2>
+<p class="goal">Goal: the agent can apply a single linear graduated (ND) filter — the "darken the sky / hold the foreground" local edit — over the corrected global base.</p>
+<p>
+  The high-risk sprint: RawTherapee's graduated-filter pp3 keys were <em>not</em> in the verified
+  reference doc, and pp3 fails silently on a wrong key. A Step-0 spike against the 5.12 binary corrected
+  three plan guesses at once — the section is <code>[Gradient]</code> (not <code>[Graduated Filter]</code>),
+  the keys are <code>CenterX</code>/<code>CenterY</code> (capitalized), and <code>Strength = −gradExposure</code>
+  (RT positive darkens). Five flat fields shipped (<code>gradEnabled, gradAngle, gradPosition, gradFeather,
+  gradExposure</code>); none trimmed.
+</p>
+
+<div class="pair">
+  <figure>
+    <img src="screenshots/sprint3_rt_darken_sky_before.png" style="max-width:100%;" alt="Darken sky before">
+    <figcaption><b>RT darken-sky — before.</b> <code>granite-dome-vista.jpg</code> baseline: top (sky) luminance 192.2, bottom (land) 107.2.</figcaption>
+  </figure>
+  <figure>
+    <img src="screenshots/sprint3_rt_darken_sky_after.png" style="max-width:100%;" alt="Darken sky after">
+    <figcaption><b>RT darken-sky — after.</b> <code>gradExposure −2 → Strength +2, Degree 0, Feather 50</code> on the binary: sky 192.2→106.0 (~86 levels), foreground held 107.2→100.6. <code>Enabled=false</code> render was md5-identical to baseline (true no-op).</figcaption>
+  </figure>
+</div>
+
+<figure>
+  <img src="screenshots/sprint3_grad_result.png" style="max-width:100%;" alt="Live grad result">
+  <figcaption><b>Live Sharp matte result.</b> The dev server's Sharp path reproduces the gradient (smooth feather, no banding) — same direction as RT, slightly more aggressive at the top edge (acceptable parity).</figcaption>
+</figure>
+
+<figure>
+  <img src="screenshots/sprint3_agent_grad_chip.png" style="max-width:100%;" alt="Agent grad chip">
+  <figcaption><b>Agent engaged the filter.</b> The timeline shows a <code>gradFilter</code> op chip — the agent reached for the graduated filter unprompted across all three live runs (all <code>POST /api/edit → 200</code>, no <code>AI_JSONParseError</code>).</figcaption>
+</figure>
+
+<div class="spike">
+  <h3>Step 0 spike — RT key verification</h3>
+  <p style="font-size:14px; color:var(--muted); margin-bottom:4px;">
+    Raw evidence from rendering candidate <code>[Gradient]</code> keys through the 5.12 binary. These
+    JPGs are what verified the section name, casing, sign, and the geometry (angle / feather / direction)
+    controls before any of it was wired into the app. The verified keys were recorded in the pp3
+    reference doc §9.
+  </p>
+  <div class="spike-grid">
+    <figure>
+      <img src="screenshots/sprint3_spike_grad_nofilter.jpg" style="max-width:100%;" alt="No filter baseline">
+      <figcaption><b>Baseline, no filter.</b> Control frame for every comparison below.</figcaption>
+    </figure>
+    <figure>
+      <img src="screenshots/sprint3_spike_grad_darken_sky_strength+3.jpg" style="max-width:100%;" alt="Darken sky strength +3">
+      <figcaption><b><code>Strength +3</code>, darken sky.</b> Positive Strength darkens — the sign that flipped <code>gradExposure</code>.</figcaption>
+    </figure>
+    <figure>
+      <img src="screenshots/sprint3_spike_grad_brighten_top_strength-3.jpg" style="max-width:100%;" alt="Brighten top strength -3">
+      <figcaption><b><code>Strength −3</code>, brighten top.</b> Negative Strength brightens — confirms the symmetric sign behavior.</figcaption>
+    </figure>
+    <figure>
+      <img src="screenshots/sprint3_spike_grad_degree180_darken_bottom.jpg" style="max-width:100%;" alt="Degree 180 darken bottom">
+      <figcaption><b><code>Degree 180</code>, darken bottom.</b> 180° flips the gradient to the bottom of the frame.</figcaption>
+    </figure>
+    <figure>
+      <img src="screenshots/sprint3_spike_grad_degree90_darken_left.jpg" style="max-width:100%;" alt="Degree 90 darken left">
+      <figcaption><b><code>Degree 90</code>, darken left.</b> 90° rotates the gradient to a vertical edge — full directional control.</figcaption>
+    </figure>
+    <figure>
+      <img src="screenshots/sprint3_spike_grad_feather0_hardline.jpg" style="max-width:100%;" alt="Feather 0 hard line">
+      <figcaption><b><code>Feather 0</code>, hard line.</b> Feather 0 produces a crisp transition edge.</figcaption>
+    </figure>
+    <figure>
+      <img src="screenshots/sprint3_spike_grad_feather100_soft.jpg" style="max-width:100%;" alt="Feather 100 soft">
+      <figcaption><b><code>Feather 100</code>, soft.</b> Feather 100 produces a broad, smooth falloff — the feather control spans the full range.</figcaption>
+    </figure>
+  </div>
+</div>
+
+<!-- ========================= SPRINT 4 ========================= -->
+<h2>Sprint 4 — Lightbox as an inspection surface</h2>
+<p class="goal">Goal: zoom/pan + fit/100%, an easy before/after comparison with the original, and keyboard-driven inspection.</p>
+<p>
+  A new dependency-free <code>useZoomPan.ts</code> composable drives wheel-zoom-to-cursor, drag pan,
+  two-finger pinch, and double-click fit↔1:1, clamped 0.5×–8×. The lightbox gained zoom controls, a
+  draggable before/after divider that reveals the original (hidden on the original frame), reuse of the
+  Sprint 2 grid overlay, and a full keyboard map. The "100%" readout is true 1:1 derived per-image
+  (<code>naturalWidth / clientWidth</code>), not a fixed multiple.
+</p>
+
+<figure>
+  <img src="screenshots/sprint4_zoom_100.png" style="max-width:100%;" alt="Zoom 100 percent">
+  <figcaption><b>True 1:1 zoom.</b> Double-click jumps from fit to a real 100% (actual pixels); wheel zoom anchors on the cursor; clamp holds exactly at 0.5× and 8×.</figcaption>
+</figure>
+
+<figure>
+  <img src="screenshots/sprint4_before_after_mid.png" style="max-width:100%;" alt="Before after mid drag">
+  <figcaption><b>Before/after divider mid-drag.</b> Original and edited frames share one zoom/pan transform (stay pixel-aligned) and are clipped by the divider position — dragging updates both clip-paths in lockstep.</figcaption>
+</figure>
+
+<figure>
+  <img src="screenshots/sprint4_grid_on.png" style="max-width:100%;" alt="Grid in lightbox">
+  <figcaption><b>Grid overlay reused.</b> The Sprint 2 <code>GridOverlay</code> rule-of-thirds toggles in the lightbox via <code>g</code> — composition check while inspecting.</figcaption>
+</figure>
+
+<div class="pair">
+  <figure>
+    <img src="screenshots/sprint4_lightbox_light.png" style="max-width:100%;" alt="Lightbox light">
+    <figcaption><b>Lightbox, light.</b> Zoom controls + footer zoom % / mode readout; full keyboard map (<code>+ − 0 c g</code> + arrows + Esc).</figcaption>
+  </figure>
+  <figure>
+    <img src="screenshots/sprint4_lightbox_dark.png" style="max-width:100%;" alt="Lightbox dark">
+    <figcaption><b>Lightbox, dark.</b> Dark-mode parity for the full inspection surface.</figcaption>
+  </figure>
+</div>
+
+<figure>
+  <img src="screenshots/sprint4_mobile_zoom.png" style="max-width:100%;" alt="Mobile pinch zoom">
+  <figcaption><b>Mobile pinch.</b> At 390×844 a two-finger pinch (40→200px spread) zooms to ~5× centered on the pinch midpoint; one-finger drag pans at scale. Pointer-capture calls are guarded so stray pointers can't break dragging.</figcaption>
+</figure>
+
+<!-- ========================= DEVIATIONS ========================= -->
+<h2>Key deviations &amp; decisions</h2>
+<ul>
+  <li><b>RT section was <code>[Gradient]</code>, not <code>[Graduated Filter]</code>.</b> The Sprint 3.0 spike caught the wrong section name, the <code>CenterX</code>/<code>CenterY</code> casing, and the <code>Strength = −gradExposure</code> sign — all of which would have silently no-op'd. The pp3 reference doc §9 was updated with the verified keys.</li>
+  <li><b>Crop computed against original dims.</b> The plan feared "rotated output dims" math; the binary showed RT keeps rotated output at original dimensions (scaling content to fit, no wedge), so crop pixels are computed against the original metadata — simpler than expected.</li>
+  <li><b>The real Sprint-1 scroll culprit was <code>UMain</code>, not the header.</b> Nuxt UI's <code>UMain</code> min-height pushed the footer below the fold; fixed by subtracting footer chrome from its min-height and condensing the <code>UFooter</code>. Grid height retuned <code>13rem → 13.5rem</code>.</li>
+  <li><b>Sprint-4 "100%" is true 1:1.</b> Derived per-image so the readout reports actual pixels rather than a mislabeling heuristic multiple.</li>
+</ul>
+<p style="font-size:14px; color:var(--muted);">All deviations were verified against the running app and/or the RT 5.12 binary — none are open risks.</p>
+
+<!-- ===================== POST-PLAN ENHANCEMENT ===================== -->
+<h2>Post-plan enhancement — agent alignment grid</h2>
+<p class="goal">Goal: after a straighten or crop, hand the agent a rule-of-thirds alignment-grid reference image so it can verify the horizon is level / verticals are true — without polluting its color/exposure reads.</p>
+<div class="note">
+  <b>Revisited a cut idea, safely.</b> "Baking a grid onto the agent's vision images" was originally
+  rejected because a grid over the primary images corrupts color/exposure reads. This ships it as a
+  <b>separate, additive third image</b> gated to geometry-active iterations: the clean current+original
+  images stay untouched (color/exposure reads stay honest), and the gridded copy is sent ONLY once a
+  straighten or crop is applied. <code>gridReference()</code> (<code>server/utils/pixels.ts</code>)
+  composites the rule-of-thirds SVG via Sharp; <code>decideConfig</code> attaches it as the third image
+  and appends a prompt line telling the model to use it for alignment only. A <code>try/catch</code>
+  degrades gracefully to the prior 2-image behavior on any compositing failure.
+</div>
+
+<figure>
+  <img src="screenshots/followup_grid_reference.jpg" style="max-width:100%;" alt="Rule-of-thirds alignment grid composited onto a sample">
+  <figcaption><b>The alignment-grid reference.</b> <code>gridReference()</code> composites 2 vertical (w/3, 2w/3) + 2 horizontal (h/3, 2h/3) lines — a scaled white stroke on a darker halo — onto a copy of the current frame. The SVG-composite path renders crisply and stays legible over both the bright sky/floor and the dark silhouette. This image is sent ONLY as a third reference after geometry is active; the clean current+original are never gridded.</figcaption>
+</figure>
+
+<figure>
+  <img src="screenshots/followup_straighten_result.png" style="max-width:100%;" alt="Live agent leveled-result run">
+  <figcaption><b>Live agent — leveled result.</b> Intent "straighten this and level the horizon" on the train-station sample: the agent applied <code>straighten · angleDeg +0.6</code> on iteration 1 (no grid), then on iteration 2 — geometry now active — a temporary <code>[grid-ref]</code> log confirmed the alignment grid was attached as the third image, and the agent assessed the frame as square against the gridlines and converged (the temp log was removed after; the <code>try/catch</code> warn log is kept). The bridge/station horizontals now read level.</figcaption>
+</figure>
+
+<!-- ========================= END TO END ========================= -->
+<h2>End to end</h2>
+<div class="note">
+  <b>The four capabilities now work as one flow.</b> A slimmer cockpit fits the viewport, so there's room
+  to work; the agent can <b>crop</b> for composition with a rule-of-thirds grid to straighten against; it
+  can lay a <b>graduated filter</b> over the corrected base to darken a sky or lift a foreground; and the
+  human can <b>inspect</b> the result in the lightbox — zoom to 1:1, pan, and slide the before/after
+  divider against the original. Every backend tool renders correctly on the live RawTherapee 5.12 engine,
+  with verified Sharp parity as the fallback.
+</div>
+
+<footer class="page">
+  Editor Tools &amp; Inspect — internal verification artifact &middot; Agentic Image Editor &middot; June 20, 2026
+</footer>
+
+</div>
+</body>
+</html>

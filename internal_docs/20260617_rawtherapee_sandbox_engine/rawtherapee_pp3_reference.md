@@ -235,6 +235,66 @@ curve is honored, not silently dropped.
 | **Color toning / split-tone** | `[ColorToning]` | `Enabled`, `Method`, `Autosat`, then per-zone keys | **SHIPPED:** `Method=Splitco` with `Autosat=false` (mandatory — with autosat on, RT ignores the explicit saturations) and a `Saturation;Hue;` pair per zone: `ShadowsColorSaturation=<sat>;<hue>;` and `HighlightsColorSaturation=<sat>;<hue>;` (sat `0..100`, hue `0..359°`), plus optional `Balance` int and `Strength` int. | ✅ **verified (Sprint 4 fix)** — the mapper emits exactly `Enabled=true`, `Method=Splitco`, `Autosat=false`, `Strength=80`, `ShadowsColorSaturation=<sat>;<hue>;`, `HighlightsColorSaturation=<sat>;<hue>;`. A cinematic config (teal shadows hue 210 / warm highlights hue 40) tints cleanly in the requested directions: shadows go bluer (mean B 94.7→109.6) while highlights keep a warm red lean, channel order stays natural (R>G). ⚠️ **`Method=RGBSliders` was REJECTED:** emitted as a partial PP3 it requires GUI-authored `OpacityCurve`/`ColorCurve` keys; without them RT falls back to a broken default curve that tints the ENTIRE image a violent neon green even with all RGB channels at 0 (reproduced against the binary). Splitco needs no curves. Proof: `verification/screenshots/sprint3_splittone_cinematic.jpg` (regenerated with the Splitco mapper). |
 | **Dehaze** | `[Dehaze]` | `Enabled`, `Strength`, `Depth`, `Saturation`, `ShowDepthMap` | `Enabled=true`; `Strength` int (default `50`), `Depth` int (default `25`), `Saturation` int (default `50`). | ✅ **verified (Sprint 3)** — `Strength=80` deepened mean luminance 117.4→102.1 (cuts the haze veil) and raised local high-frequency detail 1.32→1.43 (clarity), the expected direction. Mapper emits `Strength=<dehaze>` + `Depth=25`. Proof: `verification/screenshots/sprint3_dehaze.jpg`. |
 | **Denoise** | `[Directional Pyramid Denoising]` | `Enabled`, `Luma`, `Ldetail`, `Chroma`, `Method`, ... | `Enabled=true`; `Luma` int (default `0`), `Chroma` int (**default `15`**), `Method=Lab`. | ✅ **verified (Sprint 3)** — `Luma=80 Chroma=80` cut local high-frequency energy 1.32→0.87 (≈34% smoother), confirming visible noise reduction. Note `Chroma` defaults to 15 even when the section is disabled, so the mapper only emits the section when the agent explicitly asks (writes its own Luma/Chroma). Proof: `verification/screenshots/sprint3_noise_reduction.jpg`. |
+| **Linear graduated (ND) filter** | **`[Gradient]`** | `Enabled`, `Degree`, `Feather`, `Strength`, `CenterX`, `CenterY` | See §9 — the verified block. | ✅ **VERIFIED EMPIRICALLY (Sprint 3.0 spike)** — section name is **`[Gradient]`, NOT `[Graduated Filter]`** (the plan's guess was wrong); key casing is **`CenterX`/`CenterY`** (not `Centerx`). `Strength=+3, Degree=0` darkened the top/sky half (mean L 192→76) while holding the bottom; `Enabled=false` is a byte-for-byte no-op vs baseline. All keys round-trip exactly. Proof: `verification/screenshots/sprint3_spike_grad_*.jpg`. |
+
+---
+
+## 9. ✅ VERIFIED `[Gradient]` (linear graduated / ND filter) — Sprint 3.0 spike
+
+**VERDICT: PASS.** Pixel-graded and round-tripped against the RT 5.12 binary
+(`~/.local/bin/rawtherapee-cli`, de-sandboxed copy) on sample `granite-dome-vista.jpg`
+(bright sky over a dark granite dome — clear horizon).
+
+> ⚠️ **The section is `[Gradient]`, NOT `[Graduated Filter]`.** A profile written with
+> `[Graduated Filter]` is silently ignored (the wrong-section landmine). Key casing is
+> **`CenterX` / `CenterY`** (capital X/Y), not `Centerx`/`Centery`.
+
+### Keys, ranges, semantics (✅ all verified empirically; ranges cross-checked vs RT 5.12 source `rtgui/gradient.cc`)
+
+| Key | Type | Default | Range | Semantics (verified) |
+|-----|------|---------|-------|----------------------|
+| `Enabled` | bool | `false` | — | Must be `true` or the whole section is a no-op (verified: `Enabled=false` produced a byte-identical render to baseline). |
+| `Degree` | int (°) | `0` | `-180 .. 180` | Angle of the gradient line. **`0` = horizontal split, the effect applied to the TOP half** (sky). `180` flips it to the BOTTOM half. `90` rotates to a vertical split (effect on the LEFT half). Verified: deg0 darkens top, deg180 darkens bottom, deg90 darkens left. |
+| `Feather` | int (%) | `25` | `0 .. 100` | Transition softness. `0` = hard line (verified: sharp boundary, top fully affected / bottom untouched). `100` = very soft, nearly full-frame blend. Higher = smoother, no banding. |
+| `Strength` | float (**EV stops**) | `0` | `-5 .. 5` | The ND/exposure effect. **Positive DARKENS the affected (default top) side; negative BRIGHTENS it.** Verified: `+3` top 192→76 (darken sky), `-3` top 192→237 (brighten). Written/round-tripped at full f64 precision but plain `-3`/`3` accepted. `0` = no effect. |
+| `CenterX` | int (%) | `0` | `-100 .. 100` | Horizontal offset of the gradient center from frame center, as % of half-width. Verified at deg90: `CenterX=-50` shifted the dark region left (left 100 / right 150). |
+| `CenterY` | int (%) | `0` | `-100 .. 100` | Vertical offset of the gradient center from frame center. Verified at deg0: negative moves the transition toward the top (shrinks the darkened region); positive moves it down. |
+
+### ✅ Verified example block — "darken the bright sky, hold the foreground"
+```
+[Gradient]
+Enabled=true
+Degree=0
+Feather=25
+Strength=3
+CenterX=0
+CenterY=0
+```
+Renders the top (sky) ~1.5 stops darker with a smooth 25% feathered transition and leaves the
+foreground untouched. To darken the *bottom* instead, use `Degree=180`. To brighten the
+foreground, use a negative `Strength` (and `Degree=180` to target the lower half).
+
+### Mapper guidance (Sprint 3.4)
+- `gradAngle` → `Degree` (degrees, -180..180; default 0 = darken sky).
+- `gradExposure` → `Strength` (EV stops, -5..+5; **positive darkens** the targeted side). Map the
+  UI/agent "strength" so identity/0 disables the section (skip emitting `[Gradient]` when 0).
+- `gradFeather` → `Feather` (0..100).
+- `gradPosition` → `CenterY` (and/or `CenterX`) (-100..100).
+- Always emit `Enabled=true` when the section is written. Skip the whole section when off.
+
+### Evidence (all in `internal_docs/20260620_editor_tools_and_inspect/verification/screenshots/`)
+| File | What it proves | Mean-L measurement |
+|------|----------------|--------------------|
+| `sprint3_spike_grad_nofilter.jpg` | baseline (no filter) | top 192.1 / bot 106.9 |
+| `sprint3_spike_grad_darken_sky_strength+3.jpg` | Strength=+3 darkens top | top **76** / bot 103 |
+| `sprint3_spike_grad_brighten_top_strength-3.jpg` | Strength=-3 brightens top | top 237 / bot 115 |
+| `sprint3_spike_grad_degree180_darken_bottom.jpg` | Degree=180 flips to bottom | top 189 / bot **40** |
+| `sprint3_spike_grad_degree90_darken_left.jpg` | Degree=90 → horizontal | left **61** / right 142 |
+| `sprint3_spike_grad_feather0_hardline.jpg` | Feather=0 = hard edge | top 72.7 / bot 106.9 |
+| `sprint3_spike_grad_feather100_soft.jpg` | Feather=100 = soft | top 90 / bot 92 |
+
+(An `Enabled=false` control render was byte-identical to baseline — confirming the section is
+genuinely read and the keys are not silently dropped.)
 
 ---
 
