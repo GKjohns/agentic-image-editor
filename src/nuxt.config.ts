@@ -20,7 +20,7 @@ export default defineNuxtConfig({
   // The Vercel AI Gateway provider auto-reads AI_GATEWAY_API_KEY from process.env.
   // We surface model + step-cap here so they're swappable via env without code changes.
   runtimeConfig: {
-    agentModel: process.env.AGENT_MODEL || 'anthropic/claude-sonnet-4-6',
+    agentModel: process.env.AGENT_MODEL || 'anthropic/claude-sonnet-5.5',
     maxSteps: process.env.MAX_STEPS || '30',
     // Develop engine selection + RawTherapee runner config. The engines read
     // these via process.env (no event access), but we surface them here too so
